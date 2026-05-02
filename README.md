@@ -1,26 +1,81 @@
 # SmartFactory TwinOps AI
 
-A polished hackathon demo showing how AI can help factory teams detect machine anomalies, predict maintenance risk, and recommend maintenance actions from simulated sensor time-series data.
+SmartFactory TwinOps AI is a hackathon-ready factory operations demo that shows how a production line can move from raw telemetry and alerts to a digital twin, AI-assisted root-cause analysis, recommended actions, and maintenance execution.
 
 Live demo: https://smart-factory-alpha.vercel.app
 
-## Demo Scenario
+## Demo Screens
 
-The app simulates **Packaging Line 1** with three machines:
+![Dashboard](ui/dashboard.png)
 
-- **Motor-A**: critical anomaly scenario with rising vibration, temperature, and energy usage
-- **Conveyor-B**: warning case with increasing energy and load fluctuation
-- **Compressor-C**: stable normal operating state
+![Digital Twin](ui/Digital-Twin.png)
 
-## Features
+![Agents](ui/Agents.png)
 
-- Executive overview dashboard with line risk, OEE, health score, and work-order status
-- Live machine telemetry charts for vibration, temperature, and energy
-- Digital twin health map for Packaging Line 1
-- Explainable anomaly detection using thresholds, rolling averages, z-score style comparisons, and multivariate rules
-- AI-style recommendation panel using summarized context instead of raw time-series rows
-- Mock maintenance work order creation
-- Concise production architecture flow from PLC/IoT gateway to work order
+![Recommendations](ui/Recommendations.png)
+
+## What The Demo Shows
+
+The app presents **Packaging Line 1** as a Microsoft/Azure-style operations console for a 2-minute pitch. It is frontend-only, uses mocked/simulated operational data, and is designed to make the end-to-end value clear without requiring real factory connectivity.
+
+Core story:
+
+1. Monitor production-line health, OEE, energy usage, alerts, and latest telemetry.
+2. Visualize asset relationships in a plant digital twin.
+3. Simulate an anomaly on Motor A.
+4. Show a multi-agent cascade that detects the issue, maps asset impact, checks maintenance context, and prepares an action.
+5. Present an AI recommendation with evidence and supervisor approval.
+6. Generate and dispatch a maintenance work order.
+7. Explain business value, Azure architecture, ROI assumptions, and rollout roadmap.
+
+## Main Pages
+
+- **Dashboard**: executive KPIs, asset health cards, energy/OEE charts, latest telemetry, Azure service status, and digital twin preview.
+- **Digital Twin**: plant map, dependency impact, alert details, and status legend.
+- **Agents**: multi-agent cascade with Sensor, Twin, Maintenance, Energy, Safety, and Business Impact agents plus a live execution log.
+- **Recommendations**: AI insight, confidence score, recommended actions, evidence charts, SOP guidance, approval, and maintenance dispatch.
+- **Work Orders**: maintenance queue, work order details, checklist, status, assignee, due date, and action history.
+- **Reports**: value metrics, cost avoidance model, pain-point mapping, Azure architecture, operating model, paradigm shift, and roadmap.
+
+## Demo Controls
+
+- **Simulate Anomaly** starts the Motor A issue scenario and opens the Agents page.
+- **Reset** returns the demo to a stable monitoring state.
+- **Approve Action** changes the generated work order state to approved.
+- **Send to Maintenance / Dispatch** moves the work order to dispatched.
+- Sidebar controls support desktop collapse/hide and mobile navigation.
+- Notifications provide shortcuts into alerts and report context.
+
+## Scenario
+
+The current demo focuses on a factory line with three assets:
+
+- **Motor A**: primary issue source during the anomaly scenario.
+- **Motor B**: stable connected machine in the production line.
+- **Conveyor C**: downstream machine that can become impacted when Motor A is critical.
+
+When the anomaly is active, Motor A health drops, alert severity rises, agent execution begins, recommendations become high-confidence, and the work order flow becomes the center of the pitch.
+
+## Microsoft/Azure Architecture Story
+
+The Reports page frames the production architecture as:
+
+```text
+Factory Edge
+-> IoT Hub
+-> Fabric Real-Time
+-> Azure Digital Twins
+-> Azure ML
+-> Foundry Agents
+-> Tools & Work Orders
+```
+
+The demo also highlights Azure service roles:
+
+- **IoT Hub** for telemetry ingress from PLC, OPC UA, and MQTT sources.
+- **Azure Digital Twins** for asset graph and dependency context.
+- **Microsoft Fabric** for operational history and reporting.
+- **Foundry Agent Service** for agent orchestration and action generation.
 
 ## Tech Stack
 
@@ -28,8 +83,31 @@ The app simulates **Packaging Line 1** with three machines:
 - TypeScript
 - Tailwind CSS
 - Recharts
+- Lucide React
 - Vite
-- Simulated in-app telemetry, no backend required
+
+No backend or external API is required for this MVP.
+
+## Project Structure
+
+```text
+src/
+  App.tsx                 # Current multi-page demo shell and mocked scenario logic
+  main.tsx
+  styles.css
+  types.ts                # Shared demo types for assets, alerts, agents, reports, and work orders
+  vite-env.d.ts
+  components/             # Earlier reusable dashboard components retained in the project
+  data/
+    simulatedTelemetry.ts # Earlier telemetry generator retained for future expansion
+  utils/
+    anomalyDetection.ts   # Explainable anomaly helper logic retained for future expansion
+ui/
+  dashboard.png
+  Digital-Twin.png
+  Agents.png
+  Recommendations.png
+```
 
 ## Run Locally
 
@@ -49,3 +127,27 @@ http://localhost:5173
 ```bash
 npm run build
 ```
+
+The current build passes. Vite may warn that the JavaScript bundle is larger than 500 kB because this demo intentionally bundles charting and icon libraries for a polished pitch experience.
+
+## Preview Production Build
+
+```bash
+npm run preview
+```
+
+## Deploy To Vercel
+
+```bash
+npx vercel deploy --prod
+```
+
+Production alias:
+
+```text
+https://smart-factory-alpha.vercel.app
+```
+
+## Hackathon Positioning
+
+This is a frontend-first MVP built for storytelling and stakeholder alignment. A production version would connect to real factory data through PLC, SCADA, OPC UA, MQTT, or Azure IoT Hub; persist operational history in a backend or lakehouse; ground recommendations with SOP/manual retrieval; and integrate with a CMMS or maintenance work-order system.
