@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  background: #001b33;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 16% 10%, rgba(80, 230, 255, 0.12), transparent 28%),
+    radial-gradient(circle at 84% 16%, rgba(0, 120, 212, 0.2), transparent 26%),
+    linear-gradient(135deg, #00111f 0%, #001b33 44%, #0a2038 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.dashboard-grid {
+  background-image:
+    linear-gradient(rgba(80, 230, 255, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(80, 230, 255, 0.055) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.glass-panel {
+  border: 1px solid rgba(80, 230, 255, 0.16);
+  background: linear-gradient(180deg, rgba(2, 32, 59, 0.9), rgba(1, 19, 36, 0.86));
+  backdrop-filter: blur(16px);
+}
+
+.status-pulse {
+  animation: status-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
