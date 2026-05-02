@@ -3,8 +3,8 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
-  background: #001b33;
+  color-scheme: light;
+  background: #f8fafc;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -15,41 +15,60 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background:
-    radial-gradient(circle at 16% 10%, rgba(80, 230, 255, 0.12), transparent 28%),
-    radial-gradient(circle at 84% 16%, rgba(0, 120, 212, 0.2), transparent 26%),
-    linear-gradient(135deg, #00111f 0%, #001b33 44%, #0a2038 100%);
+  background: #f8fafc;
 }
 
 * {
   box-sizing: border-box;
 }
 
-.dashboard-grid {
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+@layer components {
+  .panel {
+    @apply rounded-lg border border-slate-200 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)];
+  }
+
+  .section-title {
+    @apply flex items-center gap-2 font-semibold text-slate-950;
+  }
+
+  .nav-item {
+    @apply flex w-full items-center gap-4 rounded-lg px-5 py-4 text-left text-base font-medium text-slate-700 transition hover:bg-blue-50 hover:text-blue-700;
+  }
+
+  .nav-item-active {
+    @apply border-l-4 border-blue-600 bg-blue-50 pl-4 text-blue-700;
+  }
+
+  .primary-button {
+    @apply inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-300;
+  }
+
+  .secondary-button {
+    @apply inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-white px-4 py-3 text-sm font-semibold text-blue-700 transition hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-200;
+  }
+
+  .icon-button {
+    @apply inline-flex h-11 w-11 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-200;
+  }
+}
+
+.factory-grid {
   background-image:
-    linear-gradient(rgba(80, 230, 255, 0.055) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(80, 230, 255, 0.055) 1px, transparent 1px);
+    linear-gradient(rgba(148, 163, 184, 0.24) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.24) 1px, transparent 1px);
   background-size: 28px 28px;
 }
 
-.glass-panel {
-  border: 1px solid rgba(80, 230, 255, 0.16);
-  background: linear-gradient(180deg, rgba(2, 32, 59, 0.9), rgba(1, 19, 36, 0.86));
-  backdrop-filter: blur(16px);
-}
-
-.status-pulse {
-  animation: status-pulse 1.8s ease-in-out infinite;
-}
-
-@keyframes status-pulse {
-  0%,
-  100% {
-    opacity: 0.6;
-    transform: scale(0.96);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.08);
-  }
+.plant-map {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(241, 245, 249, 0.9)),
+    radial-gradient(circle at 28% 36%, rgba(59, 130, 246, 0.14), transparent 26%),
+    radial-gradient(circle at 70% 62%, rgba(16, 185, 129, 0.14), transparent 24%);
 }
