@@ -1,4 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
+import type { AnalyzeApiResponse, AnalyzeRetrievedSop, DigitalTwinApiResponse, TelemetryApiResponse } from "./api/types";
+import { useTwinOpsBackend, parseConfidencePercent } from "./hooks/useTwinOpsBackend";
 import {
   Activity,
   AlertTriangle,
@@ -235,32 +237,55 @@ const roadmap: RoadmapPhase[] = [
 ];
 
 export default function App() {
+  const {
+    pollError,
+    actionError,
+    clearActionError,
+    telemetry,
+    digitalTwin,
+    analyze,
+    assets,
+    anomalyActive,
+    triggerAnomaly,
+    resetAnomaly,
+  } = useTwinOpsBackend(3000);
+
   const [activePage, setActivePage] = useState<PageId>("dashboard");
-  const [anomalyActive, setAnomalyActive] = useState(false);
   const [workOrderStatus, setWorkOrderStatus] = useState<GeneratedWorkOrder["status"]>("Awaiting approval");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
-  const assets = useMemo(() => buildAssets(anomalyActive), [anomalyActive]);
-  const activeAlert = useMemo(() => buildAlert(anomalyActive), [anomalyActive]);
+  const activeAlert = useMemo(() => buildAlert(anomalyActive, telemetry), [anomalyActive, telemetry]);
   const agents = useMemo(() => buildAgents(anomalyActive), [anomalyActive]);
   const executionLog = useMemo(() => buildExecutionLog(anomalyActive), [anomalyActive]);
   const workOrder = useMemo(() => buildWorkOrder(workOrderStatus), [workOrderStatus]);
   const activeAlerts = anomalyActive ? 1 : 0;
   const averageHealth = Math.round(assets.reduce((sum, asset) => sum + asset.healthScore, 0) / assets.length);
 
-  function simulateAnomaly() {
-    setAnomalyActive(true);
-    setWorkOrderStatus("Awaiting approval");
-    setActivePage("agents");
+  const previewLineLabel =
+    digitalTwin?.line_status === "Critical" ? "At Risk" : digitalTwin?.line_status === "Stable" ? "Stable" : anomalyActive ? "At Risk" : "Stable";
+  const previewLineDanger = digitalTwin?.line_status === "Critical" || anomalyActive;
+
+  async function simulateAnomaly() {
+    try {
+      await triggerAnomaly();
+      setWorkOrderStatus("Awaiting approval");
+      setActivePage("agents");
+    } catch {
+      /* useTwinOpsBackend sets actionError */
+    }
   }
 
-  function resetDemo() {
-    setAnomalyActive(false);
-    setWorkOrderStatus("Awaiting approval");
-    setActivePage("dashboard");
+  async function resetDemo() {
+    try {
+      await resetAnomaly();
+      setWorkOrderStatus("Awaiting approval");
+      setActivePage("dashboard");
+    } catch {
+      /* useTwinOpsBackend sets actionError */
+    }
   }
 
   function approveAction() {
@@ -310,14 +335,41 @@ export default function App() {
         <MobileSidebar activePage={activePage} open={mobileSidebarOpen} onClose={() => setMobileSidebarOpen(false)} onNavigate={navigateToPage} />
         <main className="flex-1 overflow-hidden pb-14">
           <div className="mx-auto w-full max-w-[1580px] px-4 py-5 sm:px-6 lg:px-7">
-            {activePage === "dashboard" ? (
-              <DashboardPage assets={assets} anomalyActive={anomalyActive} averageHealth={averageHealth} activeAlerts={activeAlerts} onNavigate={navigateToPage} />
+            {pollError ? (
+              <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+                Cannot reach backend ({pollError}). Charts may show fallback values until the API at{" "}
+                <code className="rounded bg-amber-100/80 px-1">{import.meta.env.VITE_API_BASE_URL || "(Vite proxy → :8000)"}</code> is available.
+              </div>
             ) : null}
-            {activePage === "digital-twin" ? <DigitalTwinPage assets={assets} alert={activeAlert} anomalyActive={anomalyActive} /> : null}
+            {actionError ? (
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+                <span>{actionError}</span>
+                <button type="button" onClick={clearActionError} className="font-medium text-red-700 underline">
+                  Dismiss
+                </button>
+              </div>
+            ) : null}
+            {activePage === "dashboard" ? (
+              <DashboardPage
+                assets={assets}
+                anomalyActive={anomalyActive}
+                averageHealth={averageHealth}
+                activeAlerts={activeAlerts}
+                telemetryTimestamp={telemetry?.timestamp ?? null}
+                previewLineLabel={previewLineLabel}
+                previewLineDanger={previewLineDanger}
+                onNavigate={navigateToPage}
+              />
+            ) : null}
+            {activePage === "digital-twin" ? (
+              <DigitalTwinPage assets={assets} alert={activeAlert} anomalyActive={anomalyActive} twin={digitalTwin} />
+            ) : null}
             {activePage === "agents" ? <AgentsPage agents={agents} executionLog={executionLog} anomalyActive={anomalyActive} /> : null}
             {activePage === "recommendations" ? (
               <RecommendationsPage
                 anomalyActive={anomalyActive}
+                analyze={analyze}
+                telemetryTimestamp={telemetry?.timestamp ?? null}
                 workOrder={workOrder}
                 onApprove={approveAction}
                 onSendToMaintenance={sendToMaintenance}
@@ -339,7 +391,7 @@ export default function App() {
         onClose={() => setNotificationsOpen(false)}
         onNavigate={navigateToPage}
       />
-      <DemoFooter sidebarCollapsed={sidebarCollapsed} sidebarHidden={sidebarHidden} />
+      <DemoFooter sidebarCollapsed={sidebarCollapsed} sidebarHidden={sidebarHidden} backendConnected={!pollError} />
     </div>
   );
 }
@@ -530,12 +582,18 @@ function DashboardPage({
   anomalyActive,
   averageHealth,
   activeAlerts,
+  telemetryTimestamp,
+  previewLineLabel,
+  previewLineDanger,
   onNavigate,
 }: {
   assets: Asset[];
   anomalyActive: boolean;
   averageHealth: number;
   activeAlerts: number;
+  telemetryTimestamp: string | null;
+  previewLineLabel: string;
+  previewLineDanger: boolean;
   onNavigate: (page: PageId) => void;
 }) {
   return (
@@ -581,12 +639,17 @@ function DashboardPage({
               </ResponsiveContainer>
             </ChartPanel>
 
-            <LatestTelemetry assets={assets} />
+            <LatestTelemetry assets={assets} latestTimestamp={telemetryTimestamp} />
           </section>
         </div>
 
         <div className="space-y-4">
-          <DigitalTwinPreview assets={assets} onOpen={() => onNavigate("digital-twin")} />
+          <DigitalTwinPreview
+            assets={assets}
+            lineStatusLabel={previewLineLabel}
+            lineStatusDanger={previewLineDanger}
+            onOpen={() => onNavigate("digital-twin")}
+          />
           <AzureServicesPanel />
         </div>
       </div>
@@ -594,7 +657,35 @@ function DashboardPage({
   );
 }
 
-function DigitalTwinPage({ assets, alert, anomalyActive }: { assets: Asset[]; alert: Alert; anomalyActive: boolean }) {
+function downstreamDetailToStatus(detail: string): AssetStatus {
+  const lower = detail.toLowerCase();
+  if (lower.includes("critical")) return "critical";
+  if (lower.includes("risk") || lower.includes("warning") || lower.includes("reduced")) return "warning";
+  return "normal";
+}
+
+function DigitalTwinPage({
+  assets,
+  alert,
+  anomalyActive,
+  twin,
+}: {
+  assets: Asset[];
+  alert: Alert;
+  anomalyActive: boolean;
+  twin: DigitalTwinApiResponse | null;
+}) {
+  const lineLabel = twin?.line_status === "Critical" ? "At Risk" : twin?.line_status === "Stable" ? "Stable" : anomalyActive ? "At Risk" : "Stable";
+  const lineDanger = twin?.line_status === "Critical" || anomalyActive;
+  const failureRisk = twin?.failure_risk ?? (anomalyActive ? "High" : "Low");
+  const affectedAsset = twin?.affected_asset ?? (anomalyActive ? "Motor A" : "None");
+  const potentialImpact =
+    twin?.potential_impact ?? (anomalyActive ? "Line 1 throughput degradation" : "Normal production");
+  const conveyorDetail = twin?.downstream_impact?.Conveyor_C ?? (anomalyActive ? "Warning" : "Normal");
+  const motorBDetail = twin?.downstream_impact?.Motor_B ?? "Normal";
+  const conveyorStatus = downstreamDetailToStatus(conveyorDetail);
+  const motorBStatus = downstreamDetailToStatus(motorBDetail);
+
   return (
     <div>
       <PageHeader
@@ -602,16 +693,22 @@ function DigitalTwinPage({ assets, alert, anomalyActive }: { assets: Asset[]; al
         subtitle="Real-time digital representation of your production line - ภาพรวมสถานะโรงงานแบบ Real-time"
         aside={
           <div className="text-sm text-slate-600">
-            Line Status: <span className="font-semibold text-emerald-700">{anomalyActive ? "At Risk" : "Stable"}</span>
-            <span className={`ml-2 inline-block h-2.5 w-2.5 rounded-full ${anomalyActive ? "bg-red-600" : "bg-emerald-600"}`} />
+            Line Status:{" "}
+            <span className={lineDanger ? "font-semibold text-red-700" : "font-semibold text-emerald-700"}>{lineLabel}</span>
+            <span className={`ml-2 inline-block h-2.5 w-2.5 rounded-full ${lineDanger ? "bg-red-600" : "bg-emerald-600"}`} />
           </div>
         }
       />
 
       <section className="panel mb-4 grid gap-4 p-5 md:grid-cols-3">
-        <SummaryStrip icon={AlertTriangle} label="Failure Risk" value={anomalyActive ? "High" : "Low"} tone={anomalyActive ? "red" : "green"} />
-        <SummaryStrip icon={Cpu} label="Affected Asset" value={anomalyActive ? "Motor A" : "None"} tone={anomalyActive ? "red" : "blue"} />
-        <SummaryStrip icon={LineChartIcon} label="Potential Impact" value={anomalyActive ? "Line 1 throughput degradation" : "Normal production"} tone="orange" />
+        <SummaryStrip
+          icon={AlertTriangle}
+          label="Failure Risk"
+          value={failureRisk}
+          tone={failureRisk === "High" ? "red" : failureRisk === "Medium" ? "orange" : "green"}
+        />
+        <SummaryStrip icon={Cpu} label="Affected Asset" value={affectedAsset} tone={affectedAsset !== "None" ? "red" : "blue"} />
+        <SummaryStrip icon={LineChartIcon} label="Potential Impact" value={potentialImpact.length > 56 ? `${potentialImpact.slice(0, 53)}…` : potentialImpact} tone="orange" />
       </section>
 
       <div className="grid gap-4 xl:grid-cols-[1fr_408px]">
@@ -627,18 +724,22 @@ function DigitalTwinPage({ assets, alert, anomalyActive }: { assets: Asset[]; al
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <DependencyNode label="Motor A" detail={anomalyActive ? "Critical" : "Normal"} status={anomalyActive ? "critical" : "normal"} />
               <ArrowConnector label="drives flow" />
-              <DependencyNode label="Conveyor C" detail={anomalyActive ? "Warning" : "Normal"} status={anomalyActive ? "warning" : "normal"} />
+              <DependencyNode label="Motor B" detail={motorBDetail} status={motorBStatus} />
+              <ArrowConnector label="to conveyor" />
+              <DependencyNode label="Conveyor C" detail={conveyorDetail} status={conveyorStatus} />
               <ArrowConnector label="feeds output" />
-              <DependencyNode label="Line 1 Output Buffer" detail={anomalyActive ? "Warning" : "Normal"} status={anomalyActive ? "warning" : "normal"} />
+              <DependencyNode
+                label="Line 1 Output Buffer"
+                detail={anomalyActive ? "Warning" : "Normal"}
+                status={anomalyActive ? "warning" : "normal"}
+              />
             </div>
-            <p className="mt-4 text-sm leading-6 text-slate-600">
-              Degradation at Motor A may reduce throughput capacity of Line 1 by <span className="font-semibold text-red-600">18-25%</span> if unaddressed.
-            </p>
+            <p className="mt-4 text-sm leading-6 text-slate-600">{potentialImpact}</p>
           </section>
         </div>
       </div>
 
-      <InfoBand text="This digital twin is powered by AI-driven analytics on Azure for real-time operational insights." />
+      <InfoBand text="This digital twin view reflects GET /api/digital-twin from the demo backend; full Azure Digital Twins integration is future work." />
     </div>
   );
 }
@@ -676,19 +777,50 @@ function AgentsPage({ agents, executionLog, anomalyActive }: { agents: AgentStep
   );
 }
 
+function parseAnalyzeImpact(impact: string): RecommendationAction["impact"] {
+  const x = impact.toLowerCase();
+  if (x.includes("high")) return "High";
+  if (x.includes("medium")) return "Medium";
+  return "Low";
+}
+
+function analyzeToRecommendationActions(data: AnalyzeApiResponse): RecommendationAction[] {
+  return data.recommended_actions.map((a) => ({
+    id: `action-${a.id}`,
+    title: a.action,
+    description: "Returned from backend GET /api/analyze",
+    impact: parseAnalyzeImpact(a.impact),
+  }));
+}
+
 function RecommendationsPage({
   anomalyActive,
+  analyze,
+  telemetryTimestamp,
   workOrder,
   onApprove,
   onSendToMaintenance,
   onOpenWorkOrder,
 }: {
   anomalyActive: boolean;
+  analyze: AnalyzeApiResponse | null;
+  telemetryTimestamp: string | null;
   workOrder: GeneratedWorkOrder;
   onApprove: () => void;
   onSendToMaintenance: () => void;
   onOpenWorkOrder: () => void;
 }) {
+  const insightTitle = analyze?.insight ?? (anomalyActive ? "Likely bearing wear" : "No active anomaly");
+  const confidencePct = analyze ? parseConfidencePercent(analyze.confidence_score) : anomalyActive ? 87 : 12;
+  const riskSubtitle = analyze?.risk_level ? `${analyze.risk_level} risk` : anomalyActive ? "High confidence" : "Low risk";
+
+  const actions =
+    anomalyActive && analyze && analyze.recommended_actions.length > 0
+      ? analyzeToRecommendationActions(analyze)
+      : anomalyActive
+        ? recommendationActions
+        : [];
+
   return (
     <div>
       <PageHeader
@@ -698,9 +830,11 @@ function RecommendationsPage({
 
       <div className="grid gap-5 xl:grid-cols-[1fr_440px]">
         <div className="space-y-4">
-          <section className="panel border-red-200 bg-red-50/55 p-5">
+          <section className={`panel p-5 ${anomalyActive ? "border-red-200 bg-red-50/55" : "border-slate-200 bg-slate-50/60"}`}>
             <div className="grid gap-4 md:grid-cols-[96px_1fr_240px] md:items-center">
-              <div className="flex h-20 w-20 items-center justify-center rounded-lg bg-red-100 text-red-600">
+              <div
+                className={`flex h-20 w-20 items-center justify-center rounded-lg ${anomalyActive ? "bg-red-100 text-red-600" : "bg-slate-100 text-slate-500"}`}
+              >
                 <ShieldAlert className="h-12 w-12" />
               </div>
               <div>
@@ -708,19 +842,22 @@ function RecommendationsPage({
                   <Sparkles className="h-4 w-4" />
                   AI Insight
                 </p>
-                <h3 className="mt-2 text-3xl font-semibold text-slate-950">{anomalyActive ? "Likely bearing wear" : "No active anomaly"}</h3>
-                <p className="mt-2 text-sm text-slate-600">Motor A - Detected on May 17, 2025 10:24 AM</p>
+                <h3 className="mt-2 text-3xl font-semibold text-slate-950">{insightTitle}</h3>
+                <p className="mt-2 text-sm text-slate-600">Motor A — last telemetry sample {telemetryTimestamp ?? "—"}</p>
               </div>
               <div>
                 <div className="flex items-center gap-2 text-sm text-slate-600">
                   Confidence Score
                   <Info className="h-4 w-4" />
                 </div>
-                <p className="mt-2 text-4xl font-semibold text-red-600">{anomalyActive ? "87%" : "12%"}</p>
+                <p className={`mt-2 text-4xl font-semibold ${anomalyActive ? "text-red-600" : "text-slate-600"}`}>{analyze?.confidence_score ?? `${confidencePct}%`}</p>
                 <div className="mt-3 h-2 rounded-lg bg-slate-200">
-                  <div className="h-2 rounded-lg bg-red-600" style={{ width: anomalyActive ? "87%" : "12%" }} />
+                  <div
+                    className={`h-2 rounded-lg ${anomalyActive ? "bg-red-600" : "bg-slate-400"}`}
+                    style={{ width: `${confidencePct}%` }}
+                  />
                 </div>
-                <p className="mt-2 text-sm text-slate-600">{anomalyActive ? "High confidence" : "Low risk"}</p>
+                <p className="mt-2 text-sm text-slate-600">{riskSubtitle}</p>
               </div>
             </div>
           </section>
@@ -731,9 +868,11 @@ function RecommendationsPage({
               Recommended Actions
             </h3>
             <div className="mt-4 space-y-3">
-              {recommendationActions.map((action, index) => (
-                <ActionRow key={action.id} action={action} order={index + 1} />
-              ))}
+              {actions.length > 0 ? (
+                actions.map((action, index) => <ActionRow key={action.id} action={action} order={index + 1} />)
+              ) : (
+                <p className="text-sm text-slate-600">No recommended actions while the line has no active anomaly.</p>
+              )}
             </div>
           </section>
         </div>
@@ -744,7 +883,7 @@ function RecommendationsPage({
       <div className="mt-4 grid gap-4 xl:grid-cols-3">
         <EvidenceChart title="Evidence: Vibration Spike" metric="Motor A - Vibration (mm/s RMS)" data={vibrationEvidence} accent="#2563EB" highlight="+78%" />
         <EvidenceChart title="Evidence: Temperature Spike" metric="Motor A - Temperature (C)" data={temperatureEvidence} accent="#EF4444" highlight="+15C" />
-        <SopPanel />
+        <SopPanel sop={analyze?.retrieved_sop} />
       </div>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_1.1fr]">
@@ -1106,13 +1245,24 @@ function AssetMetric({ icon: Icon, label, value }: { icon: LucideIcon; label: st
   );
 }
 
-function DigitalTwinPreview({ assets, onOpen }: { assets: Asset[]; onOpen: () => void }) {
+function DigitalTwinPreview({
+  assets,
+  lineStatusLabel,
+  lineStatusDanger,
+  onOpen,
+}: {
+  assets: Asset[];
+  lineStatusLabel: string;
+  lineStatusDanger: boolean;
+  onOpen: () => void;
+}) {
   return (
     <section className="panel overflow-hidden p-4">
       <div className="flex items-center justify-between">
         <h3 className="font-semibold text-slate-950">Plant Digital Twin</h3>
         <p className="text-sm text-slate-600">
-          Line Status: <span className="font-semibold text-emerald-700">Stable</span>
+          Line Status:{" "}
+          <span className={lineStatusDanger ? "font-semibold text-red-700" : "font-semibold text-emerald-700"}>{lineStatusLabel}</span>
         </p>
       </div>
       <button type="button" onClick={onOpen} className="mt-3 w-full text-left">
@@ -1253,11 +1403,12 @@ function ChartPanel({ title, subtitle, children }: { title: string; subtitle: st
   );
 }
 
-function LatestTelemetry({ assets }: { assets: Asset[] }) {
+function LatestTelemetry({ assets, latestTimestamp }: { assets: Asset[]; latestTimestamp: string | null }) {
+  const timeLabel = latestTimestamp ?? "—";
   const rows = assets.flatMap((asset) => [
-    { time: "10:24:30", machine: asset.name, metric: "Vibration", value: `${asset.vibration} mm/s`, status: asset.status },
-    { time: "10:24:30", machine: asset.name, metric: "Temperature", value: `${asset.temperature} C`, status: asset.status },
-    { time: "10:24:30", machine: asset.name, metric: "Load", value: `${asset.load}%`, status: asset.status },
+    { time: timeLabel, machine: asset.name, metric: "Vibration", value: `${asset.vibration} mm/s`, status: asset.status },
+    { time: timeLabel, machine: asset.name, metric: "Temperature", value: `${asset.temperature} C`, status: asset.status },
+    { time: timeLabel, machine: asset.name, metric: "Load", value: `${asset.load}%`, status: asset.status },
   ]);
   return (
     <section className="panel p-4">
@@ -1291,7 +1442,7 @@ function LatestTelemetry({ assets }: { assets: Asset[] }) {
           </tbody>
         </table>
       </div>
-      <p className="mt-3 text-xs text-slate-500">Showing 6 of 15 latest records</p>
+      <p className="mt-3 text-xs text-slate-500">Latest sample time from GET /api/telemetry</p>
     </section>
   );
 }
@@ -1605,7 +1756,16 @@ function EvidenceChart({
   );
 }
 
-function SopPanel() {
+function SopPanel({ sop }: { sop?: AnalyzeRetrievedSop }) {
+  const docTitle = sop?.document_id ?? "SOP-MA-102: Bearing Inspection & Replacement";
+  const matchLabel = sop?.match_score ?? "92% match";
+  const excerpts =
+    sop?.excerpts?.length ? sop.excerpts : [
+        "Increased vibration RMS above baseline indicates potential bearing wear.",
+        "Temperature rise above baseline may indicate increased friction.",
+        "Act promptly to inspect bearings and prevent unplanned downtime.",
+      ];
+
   return (
     <section className="panel p-4">
       <h3 className="section-title">
@@ -1613,16 +1773,16 @@ function SopPanel() {
         Retrieved SOP / Manual Context
       </h3>
       <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-3">
-        <p className="text-sm font-semibold text-blue-700">SOP-MA-102: Bearing Inspection & Replacement</p>
-        <p className="text-xs text-slate-600">Section 4.2 - Symptoms and Diagnostics</p>
-        <span className="mt-2 inline-block rounded-lg bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">92% match</span>
+        <p className="text-sm font-semibold text-blue-700">{docTitle}</p>
+        <p className="text-xs text-slate-600">{sop ? "From GET /api/analyze · retrieved_sop" : "Section 4.2 - Symptoms and Diagnostics (demo fallback)"}</p>
+        <span className="mt-2 inline-block rounded-lg bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">{matchLabel}</span>
       </div>
       <div className="mt-4 text-sm leading-6 text-slate-600">
         <p className="font-semibold text-slate-950">Relevant Excerpts</p>
         <ul className="mt-2 list-disc space-y-1 pl-5">
-          <li>Increased vibration RMS above baseline indicates potential bearing wear.</li>
-          <li>Temperature rise above baseline may indicate increased friction.</li>
-          <li>Act promptly to inspect bearings and prevent unplanned downtime.</li>
+          {excerpts.map((line, i) => (
+            <li key={i}>{line}</li>
+          ))}
         </ul>
       </div>
     </section>
@@ -1869,82 +2029,58 @@ function NotificationPanel({
   );
 }
 
-function DemoFooter({ sidebarCollapsed, sidebarHidden }: { sidebarCollapsed: boolean; sidebarHidden: boolean }) {
+function DemoFooter({
+  sidebarCollapsed,
+  sidebarHidden,
+  backendConnected,
+}: {
+  sidebarCollapsed: boolean;
+  sidebarHidden: boolean;
+  backendConnected: boolean;
+}) {
   return (
     <footer
       className={`fixed bottom-0 left-0 right-0 z-30 border-t border-slate-200 bg-white/95 px-4 py-3 text-sm text-slate-600 backdrop-blur ${sidebarHidden ? "lg:pl-4" : sidebarCollapsed ? "lg:pl-[92px]" : "lg:pl-[272px]"}`}
     >
       <div className="mx-auto flex max-w-[1580px] items-center gap-3">
         <Info className="h-5 w-5 text-blue-700" />
-        <span>Using simulated data for demo. Production version can connect via IoT Hub / OPC UA / MQTT.</span>
+        <span>
+          {backendConnected
+            ? "Telemetry, digital twin, and analyze views poll the local TwinOps FastAPI backend (demo)."
+            : "Backend unreachable — charts may show offline fallback values until the API is running."}
+        </span>
       </div>
     </footer>
   );
 }
 
-function buildAssets(anomalyActive: boolean): Asset[] {
-  return [
-    {
-      id: "motor-a",
-      name: "Motor A",
-      role: "Main drive motor",
-      status: anomalyActive ? "critical" : "normal",
-      healthScore: anomalyActive ? 63 : 96,
-      vibration: anomalyActive ? 3.6 : 1.2,
-      temperature: anomalyActive ? 76 : 62,
-      load: anomalyActive ? 82 : 72,
-      oee: anomalyActive ? 78 : 92,
-      x: 26,
-      y: 44,
-    },
-    {
-      id: "motor-b",
-      name: "Motor B",
-      role: "Secondary drive motor",
-      status: "normal",
-      healthScore: 95,
-      vibration: 1.3,
-      temperature: 61,
-      load: 68,
-      oee: 91,
-      x: 52,
-      y: 56,
-    },
-    {
-      id: "conveyor-c",
-      name: "Conveyor C",
-      role: "Line transfer conveyor",
-      status: anomalyActive ? "warning" : "normal",
-      healthScore: anomalyActive ? 84 : 97,
-      vibration: 1.1,
-      temperature: 55,
-      load: anomalyActive ? 74 : 65,
-      oee: anomalyActive ? 86 : 94,
-      x: 74,
-      y: 68,
-    },
-  ];
-}
-
-function buildAlert(anomalyActive: boolean): Alert {
+function buildAlert(anomalyActive: boolean, telemetry: TelemetryApiResponse | null): Alert {
+  const ma = telemetry?.motor_A;
+  const ts = telemetry?.timestamp ?? "—";
   return {
-    id: "alert-102430",
+    id: "alert-live",
     title: anomalyActive ? "Bearing wear risk detected" : "No active anomaly",
     assetId: "motor-a",
     severity: anomalyActive ? "High" : "Low",
-    timestamp: "May 16, 2025 10:24:30 AM",
+    timestamp: ts,
     details: anomalyActive ? "Motor A vibration and temperature moved above baseline together." : "Line is operating within baseline.",
-    metrics: anomalyActive
+    metrics: anomalyActive && ma
       ? [
-          { label: "Vibration Spike", value: "1.3 mm/s", delta: "+165% vs baseline" },
-          { label: "Temperature Spike", value: "61 C", delta: "+12% vs baseline" },
-          { label: "Predicted Issue Probability", value: "82%", delta: "High likelihood of failure" },
+          { label: "Vibration", value: `${ma.vibration} mm/s`, delta: "Elevated vs baseline" },
+          { label: "Temperature", value: `${ma.temperature} C`, delta: "Elevated vs baseline" },
+          { label: "Load", value: `${ma.load}%`, delta: "Operating load" },
         ]
-      : [
-          { label: "Vibration", value: "1.2 mm/s", delta: "Within baseline" },
-          { label: "Temperature", value: "62 C", delta: "Within baseline" },
-          { label: "Predicted Issue Probability", value: "8%", delta: "Low likelihood" },
-        ],
+      : anomalyActive
+        ? [
+            { label: "Vibration Spike", value: "3.6 mm/s", delta: "Above baseline" },
+            { label: "Temperature Spike", value: "76 C", delta: "Above baseline" },
+            { label: "Predicted Issue Probability", value: "82%", delta: "High likelihood of failure" },
+          ]
+        : [
+            { label: "Vibration", value: ma ? `${ma.vibration} mm/s` : "1.2 mm/s", delta: "Within baseline" },
+            { label: "Temperature", value: ma ? `${ma.temperature} C` : "62 C", delta: "Within baseline" },
+            { label: "Predicted Issue Probability", value: "8%", delta: "Low likelihood" },
+          ],
   };
 }
 
