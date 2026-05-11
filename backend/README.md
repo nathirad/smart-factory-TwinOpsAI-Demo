@@ -1,6 +1,6 @@
 # Backend API README
 
-This backend is a FastAPI prototype for the SmartFactory TwinOps AI demo. It exposes API routes for telemetry ingestion, anomaly simulation, digital twin impact, and AI/SOP-based recommendations.
+This backend is a FastAPI prototype for the SmartFactory TwinOps AI demo. It exposes API routes for telemetry ingestion, anomaly simulation, digital twin impact, AI/SOP-based recommendations, and work-order execution.
 
 The frontend does not need to know whether the backend is running in mock or production mode. It should call the same API routes in both modes. The backend chooses the data source by reading `APP_MODE` from `.env`.
 
@@ -44,6 +44,29 @@ http://localhost:8000/openapi.json
 
 There is no separate committed Swagger file yet. The Swagger UI and OpenAPI schema are generated live by FastAPI when the backend server is running.
 
+## Run Backend Tests
+
+From the project root:
+
+```bash
+pip install -r backend/requirements-dev.txt
+pytest backend/tests
+```
+
+The test suite uses FastAPI `TestClient`, so it does not require starting `uvicorn` or Docker first.
+
+Current tests cover:
+
+- OpenAPI generation
+- telemetry ingestion
+- anomaly trigger/reset
+- telemetry, digital twin, and AI recommendation responses
+- dashboard, alerts, OEE, and energy APIs
+- work order create/detail/approve/dispatch lifecycle
+- production-style work order dispatch fallback
+- reports APIs
+- production-style external JSON fallback behavior
+
 ## Run Backend With Docker
 
 From the project root:
@@ -79,6 +102,11 @@ OPENAI_API_KEY=sk-xxxx...
 AZURE_SEARCH_ENDPOINT=https://your-search-service.search.windows.net
 AZURE_SEARCH_KEY=your-admin-key
 AZURE_SEARCH_INDEX=sop-index
+WORK_ORDER_SYSTEM_NAME=External CMMS
+CMMS_DISPATCH_WEBHOOK_URL=https://your-cmms-or-logic-app-webhook.example.com/work-orders
+DASHBOARD_DATA_ENDPOINT=https://your-fabric-or-api.example.com/dashboard
+ALERTS_DATA_ENDPOINT=https://your-fabric-or-api.example.com/alerts
+REPORTS_DATA_ENDPOINT=https://your-fabric-or-api.example.com/reports
 ```
 
 ### `APP_MODE=mock`
@@ -90,6 +118,19 @@ Use local mocked telemetry, local SOP text files, and deterministic fallback rec
 The `/api/analyze` route attempts to use Azure AI Search for SOP retrieval and OpenAI for recommendation generation. If Azure Search or OpenAI fails, the backend falls back to mock SOP/recommendation data.
 
 Current production support is partial. Real IoT Hub, Azure Digital Twins, Microsoft Fabric, Foundry Agent Service, and CMMS/work-order integrations are not implemented yet.
+
+For Work Orders, production mode is hybrid:
+
+- Work order creation and approval are still tracked in backend memory for the demo.
+- Dispatch attempts to call `CMMS_DISPATCH_WEBHOOK_URL` if configured.
+- If no webhook is configured, dispatch stays safe as `Pending external dispatch` instead of pretending a real CMMS dispatch happened.
+- If the webhook succeeds, backend marks the work order as `Dispatched`.
+
+For Dashboard, Alerts, and Reports, production mode is also hybrid:
+
+- If `DASHBOARD_DATA_ENDPOINT`, `ALERTS_DATA_ENDPOINT`, or `REPORTS_DATA_ENDPOINT` is configured, backend attempts to fetch JSON from that external service.
+- If the external service is not configured or fails, backend returns production-fallback mock data with the same contract.
+- This lets frontend use the same API paths in mock and production modes.
 
 ## Current API Routes
 
@@ -253,6 +294,157 @@ Frontend use:
 - Dependency impact panel
 - Alert detail context
 
+### `GET /api/dashboard`
+
+Returns the dashboard summary contract for KPIs, OEE, energy usage, asset health, latest telemetry, alert queue, and Azure service status.
+
+In `APP_MODE=mock`, data is generated from backend in-memory demo state.
+
+In `APP_MODE=production`, backend first attempts to fetch JSON from `DASHBOARD_DATA_ENDPOINT`. If it is not configured or fails, backend returns `source: "production-fallback"`.
+
+Response shape:
+
+```json
+{
+  "mode": "mock",
+  "source": "mock",
+  "generated_at": "2026-05-11 10:24:31",
+  "line": {
+    "id": "packaging-line-1",
+    "name": "Packaging Line 1",
+    "status": "Stable"
+  },
+  "kpis": [
+    {
+      "id": "line-health",
+      "label": "Line Health",
+      "value": "95%",
+      "trend": "+3%",
+      "status": "Stable"
+    }
+  ],
+  "oee": {
+    "current": 87,
+    "target": 90,
+    "unit": "%",
+    "history": [
+      {
+        "day": "May 17",
+        "value": 87
+      }
+    ]
+  },
+  "energy": {
+    "current_kw": 590,
+    "baseline_kw": 590,
+    "unit": "kW",
+    "history": [
+      {
+        "time": "10:00",
+        "value": 590
+      }
+    ]
+  },
+  "asset_health": [],
+  "latest_telemetry": {},
+  "alerts": [],
+  "azure_services": []
+}
+```
+
+Frontend use:
+
+- Dashboard KPI cards
+- OEE chart
+- Energy chart
+- Asset health cards
+- Latest telemetry
+- Alert preview
+- Azure service status
+
+### `GET /api/alerts`
+
+Returns current operational alert queue.
+
+In mock mode, alerts are derived from anomaly state. If Motor A is critical, backend returns active Motor A and downstream-impact alerts. If no anomaly is active, backend returns an informational stable-line alert.
+
+Response shape:
+
+```json
+{
+  "mode": "mock",
+  "source": "mock",
+  "generated_at": "2026-05-11 10:24:31",
+  "alerts": [
+    {
+      "id": "alert-motor-a-bearing-risk",
+      "title": "Bearing wear risk detected",
+      "assetId": "motor-a",
+      "assetName": "Motor A",
+      "severity": "High",
+      "timestamp": "2026-05-11 10:24:31",
+      "details": "Motor A vibration and temperature moved above baseline together.",
+      "status": "Active",
+      "recommendedAction": "Inspect Motor A bearing and reduce load by 15%.",
+      "metrics": [
+        {
+          "label": "Vibration",
+          "value": "3.6 mm/s",
+          "delta": "Elevated vs baseline"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Frontend use:
+
+- Alert queue
+- Notification panel
+- Dashboard alert count
+- Digital Twin alert detail context
+
+### `GET /api/oee`
+
+Returns OEE summary and history only.
+
+Response shape:
+
+```json
+{
+  "mode": "mock",
+  "source": "mock",
+  "generated_at": "2026-05-11 10:24:31",
+  "oee": {
+    "current": 87,
+    "target": 90,
+    "unit": "%",
+    "history": []
+  }
+}
+```
+
+### `GET /api/energy`
+
+Returns energy usage summary and history only.
+
+Response shape:
+
+```json
+{
+  "mode": "mock",
+  "source": "mock",
+  "generated_at": "2026-05-11 10:24:31",
+  "energy": {
+    "current_kw": 590,
+    "baseline_kw": 590,
+    "unit": "kW",
+    "history": []
+  }
+}
+```
+
 ### `GET /api/analyze`
 
 Returns AI recommendation data for the current anomaly state.
@@ -362,6 +554,343 @@ Frontend use:
 - Execution log panel
 - Lightweight polling
 - Demo audit timeline
+### `GET /api/work-orders`
+
+Returns the current in-memory work order queue.
+
+Response:
+
+```json
+[
+  {
+    "id": "WO-20260511-0001",
+    "assetId": "motor-a",
+    "assetName": "Motor A",
+    "priority": "High",
+    "status": "Awaiting approval",
+    "assignee": "Maintenance Team",
+    "due": "Within 24 hours",
+    "title": "Bearing inspection and lubrication check",
+    "checklist": [
+      "Verify lockout/tagout before inspection.",
+      "Inspect Motor A bearing housing and lubrication level.",
+      "Check vibration trend after temporary load reduction.",
+      "Record findings and attach photos to maintenance history."
+    ],
+    "history": [
+      {
+        "time": "2026-05-11 10:24:31",
+        "event": "Work order generated from AI recommendation."
+      }
+    ],
+    "recommendation_id": 1,
+    "source": "mock",
+    "mode": "mock",
+    "externalSystem": "In-memory Work Order Queue",
+    "externalId": null,
+    "dispatchStatus": "Not dispatched",
+    "dispatchError": null
+  }
+]
+```
+
+Frontend use:
+
+- Work Orders page queue
+- Maintenance queue count
+- Work order status display
+
+### `POST /api/work-orders`
+
+Creates a work order from the current AI recommendation context.
+
+This route requires an active anomaly. If no anomaly is active, the backend returns `409 Conflict`.
+
+Request body is optional. If omitted, backend uses default Motor A recommendation values.
+
+Request:
+
+```json
+{
+  "recommendation_id": 1,
+  "action": "Inspect within 24 hours",
+  "assignee": "Maintenance Team",
+  "due": "Within 24 hours"
+}
+```
+
+Response:
+
+```json
+{
+  "id": "WO-20260511-0001",
+  "assetId": "motor-a",
+  "assetName": "Motor A",
+  "priority": "High",
+  "status": "Awaiting approval",
+  "assignee": "Maintenance Team",
+  "due": "Within 24 hours",
+  "title": "Bearing inspection and lubrication check",
+  "checklist": [
+    "Verify lockout/tagout before inspection.",
+    "Inspect Motor A bearing housing and lubrication level.",
+    "Check vibration trend after temporary load reduction.",
+    "Record findings and attach photos to maintenance history."
+  ],
+  "history": [
+    {
+      "time": "2026-05-11 10:24:31",
+      "event": "Work order generated from AI recommendation."
+    },
+    {
+      "time": "2026-05-11 10:24:31",
+      "event": "Recommended action attached: Inspect within 24 hours"
+    }
+  ],
+  "recommendation_id": 1,
+  "source": "mock",
+  "mode": "mock",
+  "externalSystem": "In-memory Work Order Queue",
+  "externalId": null,
+  "dispatchStatus": "Not dispatched",
+  "dispatchError": null
+}
+```
+
+Frontend use:
+
+- Create work order button after recommendation is shown
+- Generated work order panel
+- Initial work order status should be `Awaiting approval`
+
+### `GET /api/work-orders/{work_order_id}`
+
+Returns one work order by ID.
+
+Example:
+
+```text
+GET /api/work-orders/WO-20260511-0001
+```
+
+If the work order does not exist, backend returns `404 Not Found`.
+
+Frontend use:
+
+- Work order detail page
+- Checklist and action history
+
+### `POST /api/work-orders/{work_order_id}/approve`
+
+Approves a work order before dispatch.
+
+Example:
+
+```text
+POST /api/work-orders/WO-20260511-0001/approve
+```
+
+Optional request:
+
+```json
+{
+  "approved_by": "Shift Supervisor",
+  "note": "Proceed after lockout/tagout confirmation."
+}
+```
+
+Response status changes to:
+
+```json
+{
+  "status": "Approved"
+}
+```
+
+The full response is the updated work order object.
+
+Frontend use:
+
+- Approve Action button
+- Supervisor approval step
+
+### `POST /api/work-orders/{work_order_id}/dispatch`
+
+Dispatches an approved work order to the maintenance team.
+
+This route requires status `Approved`. If the work order is still `Awaiting approval`, backend returns `409 Conflict`.
+
+Example:
+
+```text
+POST /api/work-orders/WO-20260511-0001/dispatch
+```
+
+Optional request:
+
+```json
+{
+  "dispatched_by": "Maintenance Coordinator",
+  "note": "Send to rotating equipment team."
+}
+```
+
+In `APP_MODE=mock`, response status changes to:
+
+```json
+{
+  "status": "Dispatched",
+  "dispatchStatus": "Dispatched"
+}
+```
+
+In `APP_MODE=production`, dispatch behavior is hybrid:
+
+- If `CMMS_DISPATCH_WEBHOOK_URL` is configured and the webhook succeeds, response status changes to `Dispatched`.
+- If `CMMS_DISPATCH_WEBHOOK_URL` is not configured, response remains `Approved` and `dispatchStatus` becomes `Pending external dispatch`.
+- If the webhook fails, response remains `Approved`, `dispatchStatus` becomes `Failed`, and `dispatchError` contains the failure reason.
+
+The full response is always the updated work order object.
+
+Frontend use:
+
+- Send to Maintenance / Dispatch button
+- Maintenance dispatch confirmation
+
+### Work Order Demo Flow
+
+Recommended frontend flow:
+
+1. `POST /api/trigger-anomaly`
+2. `GET /api/analyze`
+3. `POST /api/work-orders`
+4. `POST /api/work-orders/{work_order_id}/approve`
+5. `POST /api/work-orders/{work_order_id}/dispatch`
+6. `GET /api/work-orders`
+
+Current work order storage is in-memory. Mock mode simulates the full lifecycle. Production mode can dispatch to a real CMMS-style webhook if `CMMS_DISPATCH_WEBHOOK_URL` is configured.
+
+### Work Order Hybrid Behavior
+
+The Work Orders API uses the same route contract in mock and production modes.
+
+Mock mode:
+
+```text
+POST /api/work-orders
+-> create in-memory work order
+-> status = Awaiting approval
+
+POST /api/work-orders/{id}/approve
+-> status = Approved
+
+POST /api/work-orders/{id}/dispatch
+-> status = Dispatched
+-> dispatchStatus = Dispatched
+```
+
+Production mode:
+
+```text
+POST /api/work-orders
+-> create backend-tracked work order draft
+-> status = Awaiting approval
+
+POST /api/work-orders/{id}/approve
+-> record supervisor approval
+-> status = Approved
+
+POST /api/work-orders/{id}/dispatch
+-> if CMMS_DISPATCH_WEBHOOK_URL exists, call external maintenance/CMMS endpoint
+-> if external dispatch succeeds, status = Dispatched
+-> if no webhook exists, status = Approved and dispatchStatus = Pending external dispatch
+-> if webhook fails, status = Approved and dispatchStatus = Failed
+```
+
+This keeps the demo safe: AI can draft the work order, but approval and dispatch remain explicit API actions.
+
+### `GET /api/reports`
+
+Returns the full executive reports contract in one response.
+
+In `APP_MODE=mock`, backend returns mock business value, ROI, Azure architecture, operating model, and roadmap data.
+
+In `APP_MODE=production`, backend first attempts to fetch JSON from `REPORTS_DATA_ENDPOINT`. If it is not configured or fails, backend returns `source: "production-fallback"`.
+
+Response sections:
+
+```json
+{
+  "mode": "mock",
+  "source": "mock",
+  "generated_at": "2026-05-11 10:24:31",
+  "business_value": {},
+  "roi": {},
+  "azure_architecture": {},
+  "operating_model": {},
+  "roadmap": {}
+}
+```
+
+### `GET /api/reports/business-value`
+
+Returns business value metrics and pain-point mapping.
+
+Frontend use:
+
+- Executive report metrics
+- Pain-point to TwinOps response table
+- Business value summary
+
+### `GET /api/reports/roi`
+
+Returns ROI assumptions and cost avoidance model.
+
+Response includes:
+
+- annual cost avoidance
+- ROI percentage
+- payback months
+- risk exposure per hour
+- value-driver assumptions
+
+### `GET /api/reports/azure-architecture`
+
+Returns Azure architecture story:
+
+```text
+Factory Edge
+-> IoT Hub
+-> Fabric Real-Time
+-> Azure Digital Twins
+-> Azure ML
+-> Foundry Agents
+-> Tools & Work Orders
+```
+
+Frontend use:
+
+- Azure architecture report section
+- Service role explanation
+
+### `GET /api/reports/operating-model`
+
+Returns the AI-assisted operations model and paradigm shift.
+
+Frontend use:
+
+- Operating model
+- Traditional vs AI-driven comparison
+
+### `GET /api/reports/roadmap`
+
+Returns rollout roadmap phases and risk mitigation notes.
+
+Frontend use:
+
+- Roadmap section
+- Phase cards
+- Risk mitigation narrative
 
 ## Mock Data
 
@@ -489,11 +1018,13 @@ The backend currently uses in-memory state:
   "anomaly_start_time": 0,
   "latest_ingested_data": null,
   "agent_cascade_started": false,
-  "agent_cascade_last_run": null
+  "agent_cascade_last_run": null,
+  "work_orders": {},
+  "next_work_order_sequence": 1
 }
 ```
 
-This means state is reset when the FastAPI process restarts. There is no database yet.
+This means state is reset when the FastAPI process restarts. `POST /api/reset-anomaly` also clears work orders and resets the work-order sequence. There is no database yet.
 
 ## Frontend Integration Notes
 
@@ -501,10 +1032,15 @@ Recommended frontend flow:
 
 1. Dashboard polls `GET /api/telemetry`.
 2. Simulate Anomaly calls `POST /api/trigger-anomaly`.
-3. Digital Twin page calls `GET /api/digital-twin`.
-4. Recommendations page calls `GET /api/analyze`.
-5. Agents page can call `GET /api/agents` or `GET /api/agents/logs`.
-6. Reset calls `POST /api/reset-anomaly`.
+3. Dashboard can call `GET /api/dashboard`, `GET /api/alerts`, `GET /api/oee`, or `GET /api/energy`.
+4. Digital Twin page calls `GET /api/digital-twin`.
+5. Recommendations page calls `GET /api/analyze`.
+6. Recommendations page creates a work order with `POST /api/work-orders`.
+7. Supervisor approval calls `POST /api/work-orders/{work_order_id}/approve`.
+8. Dispatch calls `POST /api/work-orders/{work_order_id}/dispatch`.
+9. Reports page calls `GET /api/reports` or individual report routes.
+10. Reset calls `POST /api/reset-anomaly`.
+11. Agents page can call `GET /api/agents` or `GET /api/agents/logs`.
 
 The frontend should treat API responses as the source of truth for backend-driven demo state.
 
@@ -520,6 +1056,8 @@ The following story items do not currently have backend API routes:
 - Work order create/list/detail API
 - Work order dispatch API
 - Reports/ROI/roadmap API
+- Agent cascade execution API
+- Agent execution log API
 - Real Azure IoT Hub telemetry ingestion
 - Real Azure Digital Twins graph query
 - Microsoft Fabric history/reporting integration
@@ -531,18 +1069,9 @@ The following story items do not currently have backend API routes:
 These are proposed routes only. Agents API routes are already implemented separately above.
 
 ```text
-GET  /api/dashboard
-GET  /api/alerts
 GET  /api/assets
 GET  /api/recommendations
 POST /api/recommendations/{id}/approve
-GET  /api/work-orders
-POST /api/work-orders
-GET  /api/work-orders/{id}
-POST /api/work-orders/{id}/dispatch
-GET  /api/reports/business-value
-GET  /api/reports/azure-architecture
-GET  /api/reports/roadmap
 ```
 
 ## Known Issues
@@ -550,4 +1079,6 @@ GET  /api/reports/roadmap
 - Backend is currently untracked in git.
 - README at the project root still describes the app as frontend-only.
 - Some SOP text appears with encoding artifacts and should be cleaned before production use.
-- `APP_MODE=production` only affects recommendation retrieval/generation today. Other routes still use mocked or in-memory data.
+- `APP_MODE=production` is hybrid. Recommendations can use Azure AI Search/OpenAI, Work Orders can call a CMMS webhook, and Dashboard/Alerts/Reports can call external JSON endpoints. If those services are not configured, backend returns production-fallback mock data.
+- Work Orders API storage is still in memory. Production dispatch only calls a real external maintenance system when `CMMS_DISPATCH_WEBHOOK_URL` is configured.
+- Dashboard, Alerts, and Reports production mode currently depends on external JSON endpoints if configured. There is no direct Fabric or Azure Digital Twins SDK integration yet.
