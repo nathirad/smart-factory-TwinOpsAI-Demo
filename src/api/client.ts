@@ -1,4 +1,15 @@
-import type { AnalyzeApiResponse, DigitalTwinApiResponse, TelemetryApiResponse } from "./types";
+import type {
+  AlertsApiResponse,
+  AnalyzeApiResponse,
+  DashboardApiResponse,
+  DigitalTwinApiResponse,
+  ReportsApiResponse,
+  TelemetryApiResponse,
+  WorkOrderApiResponse,
+  WorkOrderApprovalRequest,
+  WorkOrderCreateRequest,
+  WorkOrderDispatchRequest,
+} from "./types";
 
 function joinUrl(base: string, path: string): string {
   const b = base.endsWith("/") ? base.slice(0, -1) : base;
@@ -29,6 +40,26 @@ export async function fetchAnalyze(baseUrl: string): Promise<AnalyzeApiResponse>
   return readJson<AnalyzeApiResponse>(res);
 }
 
+export async function fetchDashboard(baseUrl: string): Promise<DashboardApiResponse> {
+  const res = await fetch(joinUrl(baseUrl, "/api/dashboard"));
+  return readJson<DashboardApiResponse>(res);
+}
+
+export async function fetchAlerts(baseUrl: string): Promise<AlertsApiResponse> {
+  const res = await fetch(joinUrl(baseUrl, "/api/alerts"));
+  return readJson<AlertsApiResponse>(res);
+}
+
+export async function fetchReports(baseUrl: string): Promise<ReportsApiResponse> {
+  const res = await fetch(joinUrl(baseUrl, "/api/reports"));
+  return readJson<ReportsApiResponse>(res);
+}
+
+export async function fetchWorkOrders(baseUrl: string): Promise<WorkOrderApiResponse[]> {
+  const res = await fetch(joinUrl(baseUrl, "/api/work-orders"));
+  return readJson<WorkOrderApiResponse[]>(res);
+}
+
 export async function postTriggerAnomaly(baseUrl: string): Promise<void> {
   const res = await fetch(joinUrl(baseUrl, "/api/trigger-anomaly"), { method: "POST" });
   if (!res.ok) {
@@ -43,4 +74,31 @@ export async function postResetAnomaly(baseUrl: string): Promise<void> {
     const text = await res.text();
     throw new Error(text || `${res.status} ${res.statusText}`);
   }
+}
+
+export async function postCreateWorkOrder(baseUrl: string, payload?: WorkOrderCreateRequest): Promise<WorkOrderApiResponse> {
+  const res = await fetch(joinUrl(baseUrl, "/api/work-orders"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload ?? {}),
+  });
+  return readJson<WorkOrderApiResponse>(res);
+}
+
+export async function postApproveWorkOrder(baseUrl: string, workOrderId: string, payload?: WorkOrderApprovalRequest): Promise<WorkOrderApiResponse> {
+  const res = await fetch(joinUrl(baseUrl, `/api/work-orders/${workOrderId}/approve`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload ?? {}),
+  });
+  return readJson<WorkOrderApiResponse>(res);
+}
+
+export async function postDispatchWorkOrder(baseUrl: string, workOrderId: string, payload?: WorkOrderDispatchRequest): Promise<WorkOrderApiResponse> {
+  const res = await fetch(joinUrl(baseUrl, `/api/work-orders/${workOrderId}/dispatch`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload ?? {}),
+  });
+  return readJson<WorkOrderApiResponse>(res);
 }

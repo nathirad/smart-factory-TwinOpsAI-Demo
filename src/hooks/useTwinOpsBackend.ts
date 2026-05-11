@@ -1,12 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchAnalyze,
+  fetchAlerts,
+  fetchDashboard,
   fetchDigitalTwin,
+  fetchReports,
   fetchTelemetry,
+  fetchWorkOrders,
+  postApproveWorkOrder,
+  postCreateWorkOrder,
+  postDispatchWorkOrder,
   postResetAnomaly,
   postTriggerAnomaly,
 } from "../api/client";
-import type { AnalyzeApiResponse, DigitalTwinApiResponse, TelemetryApiResponse } from "../api/types";
+import type {
+  AlertsApiResponse,
+  AnalyzeApiResponse,
+  DashboardApiResponse,
+  DigitalTwinApiResponse,
+  ReportsApiResponse,
+  TelemetryApiResponse,
+  WorkOrderApiResponse,
+} from "../api/types";
 import { buildAssets } from "../data/assetBuilders";
 import type { Asset, AssetStatus } from "../types";
 
@@ -92,6 +107,10 @@ export function useTwinOpsBackend(pollMs = 3000) {
   const [telemetry, setTelemetry] = useState<TelemetryApiResponse | null>(null);
   const [digitalTwin, setDigitalTwin] = useState<DigitalTwinApiResponse | null>(null);
   const [analyze, setAnalyze] = useState<AnalyzeApiResponse | null>(null);
+  const [dashboard, setDashboard] = useState<DashboardApiResponse | null>(null);
+  const [alerts, setAlerts] = useState<AlertsApiResponse | null>(null);
+  const [reports, setReports] = useState<ReportsApiResponse | null>(null);
+  const [workOrders, setWorkOrders] = useState<WorkOrderApiResponse[]>([]);
   const [pollError, setPollError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -106,6 +125,17 @@ export function useTwinOpsBackend(pollMs = 3000) {
       setTelemetry(tel);
       setDigitalTwin(twin);
       setAnalyze(ann);
+
+      const [dash, alertQueue, reportData, orders] = await Promise.all([
+        fetchDashboard(baseUrl),
+        fetchAlerts(baseUrl),
+        fetchReports(baseUrl),
+        fetchWorkOrders(baseUrl),
+      ]);
+      setDashboard(dash);
+      setAlerts(alertQueue);
+      setReports(reportData);
+      setWorkOrders(orders);
       setPollError(null);
       setReady(true);
     } catch (e) {
@@ -142,9 +172,61 @@ export function useTwinOpsBackend(pollMs = 3000) {
     setActionError(null);
     try {
       await postResetAnomaly(baseUrl);
+      setWorkOrders([]);
       await refresh();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Reset failed");
+      throw e;
+    }
+  }, [baseUrl, refresh]);
+
+  const createWorkOrder = useCallback(async () => {
+    setActionError(null);
+    try {
+      const firstAction = analyze?.recommended_actions?.[0];
+      const created = await postCreateWorkOrder(baseUrl, {
+        recommendation_id: firstAction?.id,
+        action: firstAction?.action ?? "Inspect within 24 hours",
+        assignee: "Maintenance Team",
+        due: "Within 24 hours",
+      });
+      setWorkOrders((orders) => [created, ...orders.filter((order) => order.id !== created.id)]);
+      await refresh();
+      return created;
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Create work order failed");
+      throw e;
+    }
+  }, [analyze, baseUrl, refresh]);
+
+  const approveWorkOrder = useCallback(async (workOrderId: string) => {
+    setActionError(null);
+    try {
+      const updated = await postApproveWorkOrder(baseUrl, workOrderId, {
+        approved_by: "Shift Supervisor",
+        note: "Approved from TwinOps frontend.",
+      });
+      setWorkOrders((orders) => orders.map((order) => (order.id === updated.id ? updated : order)));
+      await refresh();
+      return updated;
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Approve work order failed");
+      throw e;
+    }
+  }, [baseUrl, refresh]);
+
+  const dispatchWorkOrder = useCallback(async (workOrderId: string) => {
+    setActionError(null);
+    try {
+      const updated = await postDispatchWorkOrder(baseUrl, workOrderId, {
+        dispatched_by: "Maintenance Coordinator",
+        note: "Dispatched from TwinOps frontend.",
+      });
+      setWorkOrders((orders) => orders.map((order) => (order.id === updated.id ? updated : order)));
+      await refresh();
+      return updated;
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Dispatch work order failed");
       throw e;
     }
   }, [baseUrl, refresh]);
@@ -158,10 +240,17 @@ export function useTwinOpsBackend(pollMs = 3000) {
     telemetry,
     digitalTwin,
     analyze,
+    dashboard,
+    alerts,
+    reports,
+    workOrders,
     assets,
     anomalyActive,
     refresh,
     triggerAnomaly,
     resetAnomaly,
+    createWorkOrder,
+    approveWorkOrder,
+    dispatchWorkOrder,
   };
 }
