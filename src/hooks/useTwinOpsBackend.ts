@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  fetchAgents,
   fetchAnalyze,
   fetchDigitalTwin,
   fetchTelemetry,
+  postRunAgents,
   postResetAnomaly,
   postTriggerAnomaly,
 } from "../api/client";
-import type { AnalyzeApiResponse, DigitalTwinApiResponse, TelemetryApiResponse } from "../api/types";
+import type { AgentsApiResponse, AnalyzeApiResponse, DigitalTwinApiResponse, TelemetryApiResponse } from "../api/types";
 import { buildAssets } from "../data/assetBuilders";
 import type { Asset, AssetStatus } from "../types";
 
@@ -92,20 +94,23 @@ export function useTwinOpsBackend(pollMs = 3000) {
   const [telemetry, setTelemetry] = useState<TelemetryApiResponse | null>(null);
   const [digitalTwin, setDigitalTwin] = useState<DigitalTwinApiResponse | null>(null);
   const [analyze, setAnalyze] = useState<AnalyzeApiResponse | null>(null);
+  const [agentsApi, setAgentsApi] = useState<AgentsApiResponse | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const [tel, twin, ann] = await Promise.all([
+      const [tel, twin, ann, agents] = await Promise.all([
         fetchTelemetry(baseUrl),
         fetchDigitalTwin(baseUrl),
         fetchAnalyze(baseUrl),
+        fetchAgents(baseUrl),
       ]);
       setTelemetry(tel);
       setDigitalTwin(twin);
       setAnalyze(ann);
+      setAgentsApi(agents);
       setPollError(null);
       setReady(true);
     } catch (e) {
@@ -149,6 +154,18 @@ export function useTwinOpsBackend(pollMs = 3000) {
     }
   }, [baseUrl, refresh]);
 
+  const runAgents = useCallback(async () => {
+    setActionError(null);
+    try {
+      const agents = await postRunAgents(baseUrl);
+      setAgentsApi(agents);
+      await refresh();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Agent run failed");
+      throw e;
+    }
+  }, [baseUrl, refresh]);
+
   return {
     baseUrl,
     ready,
@@ -158,10 +175,12 @@ export function useTwinOpsBackend(pollMs = 3000) {
     telemetry,
     digitalTwin,
     analyze,
+    agentsApi,
     assets,
     anomalyActive,
     refresh,
     triggerAnomaly,
     resetAnomaly,
+    runAgents,
   };
 }

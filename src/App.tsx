@@ -244,10 +244,12 @@ export default function App() {
     telemetry,
     digitalTwin,
     analyze,
+    agentsApi,
     assets,
     anomalyActive,
     triggerAnomaly,
     resetAnomaly,
+    runAgents,
   } = useTwinOpsBackend(3000);
 
   const [activePage, setActivePage] = useState<PageId>("dashboard");
@@ -258,8 +260,9 @@ export default function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   const activeAlert = useMemo(() => buildAlert(anomalyActive, telemetry), [anomalyActive, telemetry]);
-  const agents = useMemo(() => buildAgents(anomalyActive), [anomalyActive]);
-  const executionLog = useMemo(() => buildExecutionLog(anomalyActive), [anomalyActive]);
+  // Agents API integration: prefer backend cascade data and keep local mock builders as a fallback.
+  const agents = useMemo(() => (agentsApi ? agentsApi.agents.map(apiAgentToAgentStep) : buildAgents(anomalyActive)), [agentsApi, anomalyActive]);
+  const executionLog = useMemo(() => (agentsApi ? agentsApi.execution_log.map(apiLogToExecutionLog) : buildExecutionLog(anomalyActive)), [agentsApi, anomalyActive]);
   const workOrder = useMemo(() => buildWorkOrder(workOrderStatus), [workOrderStatus]);
   const activeAlerts = anomalyActive ? 1 : 0;
   const averageHealth = Math.round(assets.reduce((sum, asset) => sum + asset.healthScore, 0) / assets.length);
@@ -283,6 +286,15 @@ export default function App() {
       await resetAnomaly();
       setWorkOrderStatus("Awaiting approval");
       setActivePage("dashboard");
+    } catch {
+      /* useTwinOpsBackend sets actionError */
+    }
+  }
+
+  async function runAgentCascade() {
+    try {
+      await runAgents();
+      setActivePage("agents");
     } catch {
       /* useTwinOpsBackend sets actionError */
     }
@@ -364,7 +376,7 @@ export default function App() {
             {activePage === "digital-twin" ? (
               <DigitalTwinPage assets={assets} alert={activeAlert} anomalyActive={anomalyActive} twin={digitalTwin} />
             ) : null}
-            {activePage === "agents" ? <AgentsPage agents={agents} executionLog={executionLog} anomalyActive={anomalyActive} /> : null}
+            {activePage === "agents" ? <AgentsPage agents={agents} executionLog={executionLog} anomalyActive={anomalyActive} agentsApiMode={agentsApi?.mode ?? "local-fallback"} onRunCascade={runAgentCascade} /> : null}
             {activePage === "recommendations" ? (
               <RecommendationsPage
                 anomalyActive={anomalyActive}
@@ -744,13 +756,25 @@ function DigitalTwinPage({
   );
 }
 
-function AgentsPage({ agents, executionLog, anomalyActive }: { agents: AgentStep[]; executionLog: ExecutionLog[]; anomalyActive: boolean }) {
+function AgentsPage({
+  agents,
+  executionLog,
+  anomalyActive,
+  agentsApiMode,
+  onRunCascade,
+}: {
+  agents: AgentStep[];
+  executionLog: ExecutionLog[];
+  anomalyActive: boolean;
+  agentsApiMode: string;
+  onRunCascade: () => void;
+}) {
   return (
     <div>
       <PageHeader
         title="Multi-Agent Cascade"
         subtitle="AI agents collaborate in sequence to detect, analyze, and recommend actions - Agent ทำงานเป็นลำดับเพื่อเปลี่ยนข้อมูลเป็น Action"
-        aside={<OrchestrationCard />}
+        aside={<OrchestrationCard agentsApiMode={agentsApiMode} onRunCascade={onRunCascade} />}
       />
 
       <div className="grid gap-5 xl:grid-cols-[1fr_340px]">
@@ -1534,20 +1558,25 @@ function ArrowConnector({ label }: { label: string }) {
   );
 }
 
-function OrchestrationCard() {
+function OrchestrationCard({ agentsApiMode, onRunCascade }: { agentsApiMode: string; onRunCascade: () => void }) {
   return (
-    <section className="panel flex items-center gap-4 px-5 py-3">
+    <section className="panel flex flex-wrap items-center gap-4 px-5 py-3">
       <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-violet-50 text-violet-700">
         <Bot className="h-7 w-7" />
       </div>
       <div>
         <p className="text-xs text-slate-500">Orchestrated by</p>
         <p className="font-semibold text-blue-700">Foundry Agent Service</p>
+        <p className="text-xs text-slate-500">{agentsApiMode}</p>
       </div>
       <span className="ml-auto flex items-center gap-2 text-sm text-emerald-700">
         <span className="h-2 w-2 rounded-full bg-emerald-600" />
         Operational
       </span>
+      <button type="button" onClick={onRunCascade} className="btn-secondary text-sm">
+        <Bot className="h-4 w-4" />
+        Run Cascade
+      </button>
     </section>
   );
 }
@@ -1573,6 +1602,29 @@ function AgentCard({ agent, isActive, showConnector }: { agent: AgentStep; isAct
       {showConnector ? <div className="absolute right-[-18px] top-1/2 hidden h-px w-9 bg-slate-300 xl:block" /> : null}
     </div>
   );
+}
+
+function apiAgentToAgentStep(agent: NonNullable<ReturnType<typeof useTwinOpsBackend>["agentsApi"]>["agents"][number]): AgentStep {
+  return {
+    id: agent.id,
+    order: agent.order,
+    name: agent.name,
+    role: agent.role,
+    status: agent.status,
+    summary: agent.summary,
+    elapsed: agent.elapsed,
+    tone: agent.tone,
+  };
+}
+
+function apiLogToExecutionLog(log: NonNullable<ReturnType<typeof useTwinOpsBackend>["agentsApi"]>["execution_log"][number]): ExecutionLog {
+  return {
+    id: log.id,
+    agent: log.agent,
+    time: log.time,
+    message: log.message,
+    status: log.status,
+  };
 }
 
 function ExecutionLogPanel({ logs }: { logs: ExecutionLog[] }) {
