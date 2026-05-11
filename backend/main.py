@@ -335,3 +335,39 @@ async def get_ai_recommendations():
     except Exception as exc:
         print(f"OpenAI generation failed: {exc}. Returning fallback response.")
         return fallback_response
+
+# Azure IoT Hub live telemetry integration
+from services.iot_hub_service import (
+    start_iot_hub_listener,
+    stop_iot_hub_listener,
+    get_latest_telemetry,
+)
+
+
+@app.on_event("startup")
+async def startup_iot_hub_listener():
+    await start_iot_hub_listener()
+
+
+@app.on_event("shutdown")
+async def shutdown_iot_hub_listener():
+    await stop_iot_hub_listener()
+
+
+@app.get("/api/telemetry/live")
+async def get_live_telemetry():
+    telemetry = get_latest_telemetry()
+
+    if telemetry is None:
+        return {
+            "source": "azure-iot-hub",
+            "status": "waiting",
+            "message": "No telemetry received yet. Start the device simulator first.",
+            "data": None,
+        }
+
+    return {
+        "source": "azure-iot-hub",
+        "status": "ok",
+        "data": telemetry,
+    }

@@ -1,0 +1,8 @@
+{
+  "deviceId": "simDevice01",
+  "timestamp": "2026-05-11T16:10:00Z",
+  "vibration": 2.34,
+  "temperature": 72.5,
+  "energyLoad": 18.7,
+  "status": "NORMAL"
+}
