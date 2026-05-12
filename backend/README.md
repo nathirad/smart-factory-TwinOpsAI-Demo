@@ -497,6 +497,7 @@ Frontend use:
 - SOP evidence
 - Recommended action list
 
+<<<<<<< HEAD
 ### `GET /api/work-orders`
 
 Returns the current in-memory work order queue.
@@ -834,6 +835,65 @@ Frontend use:
 - Roadmap section
 - Phase cards
 - Risk mitigation narrative
+=======
+### Agents API Feature
+
+The Agents API is a separate backend feature implemented in:
+
+```text
+backend/features/agents_api.py
+```
+
+It simulates a Microsoft Azure multi-agent cascade for:
+
+- Sensor Agent: Azure IoT Hub telemetry monitoring
+- Twin Agent: Azure Digital Twins dependency impact
+- Maintenance Agent: Azure AI Search + Azure OpenAI SOP analysis
+- Energy Agent: Microsoft Fabric Real-Time Intelligence load scenario
+- Safety Agent: Microsoft Entra ID + Defender for IoT guardrails
+- Business Impact Agent: Azure Monitor + Power BI impact summary
+
+Current routes:
+
+```text
+GET  /api/agents
+POST /api/agents/run
+GET  /api/agents/logs
+```
+
+This is still a simulated Azure agent workflow. It does not call real Azure AI Foundry Agent Service yet.
+
+### `GET /api/agents`
+
+Returns the current agent cascade state, Azure service mapping, agent steps, and execution log.
+
+Frontend use:
+
+- Agents page
+- Multi-agent cascade cards
+- Azure service mapping
+- Execution log panel
+
+### `POST /api/agents/run`
+
+Manually starts the simulated agent cascade without requiring a new telemetry payload.
+
+Frontend use:
+
+- Manual API testing
+- Future Agents page run button
+- Demo control flow
+
+### `GET /api/agents/logs`
+
+Returns only the execution log for clients that do not need the full agent payload.
+
+Frontend use:
+
+- Execution log panel
+- Lightweight polling
+- Demo audit timeline
+>>>>>>> origin/Dev/backend-APIAgent
 
 ## Mock Data
 
@@ -960,8 +1020,13 @@ The backend currently uses in-memory state:
   "is_anomaly_active": false,
   "anomaly_start_time": 0,
   "latest_ingested_data": null,
+<<<<<<< HEAD
   "work_orders": {},
   "next_work_order_sequence": 1
+=======
+  "agent_cascade_started": false,
+  "agent_cascade_last_run": null
+>>>>>>> origin/Dev/backend-APIAgent
 }
 ```
 
@@ -973,6 +1038,7 @@ Recommended frontend flow:
 
 1. Dashboard polls `GET /api/telemetry`.
 2. Simulate Anomaly calls `POST /api/trigger-anomaly`.
+<<<<<<< HEAD
 3. Dashboard can call `GET /api/dashboard`, `GET /api/alerts`, `GET /api/oee`, or `GET /api/energy`.
 4. Digital Twin page calls `GET /api/digital-twin`.
 5. Recommendations page calls `GET /api/analyze`.
@@ -981,6 +1047,12 @@ Recommended frontend flow:
 8. Dispatch calls `POST /api/work-orders/{work_order_id}/dispatch`.
 9. Reports page calls `GET /api/reports` or individual report routes.
 10. Reset calls `POST /api/reset-anomaly`.
+=======
+3. Digital Twin page calls `GET /api/digital-twin`.
+4. Recommendations page calls `GET /api/analyze`.
+5. Agents page can call `GET /api/agents` or `GET /api/agents/logs`.
+6. Reset calls `POST /api/reset-anomaly`.
+>>>>>>> origin/Dev/backend-APIAgent
 
 The frontend should treat API responses as the source of truth for backend-driven demo state.
 
@@ -988,23 +1060,31 @@ The frontend should treat API responses as the source of truth for backend-drive
 
 The following story items do not currently have backend API routes:
 
+<<<<<<< HEAD
 - Agent cascade execution API
 - Agent execution log API
+=======
+- Dashboard KPI summary API
+- OEE history API
+- Energy usage history API
+- Alert queue API
+- Recommendation approval API
+- Work order create/list/detail API
+- Work order dispatch API
+- Reports/ROI/roadmap API
+>>>>>>> origin/Dev/backend-APIAgent
 - Real Azure IoT Hub telemetry ingestion
 - Real Azure Digital Twins graph query
 - Microsoft Fabric history/reporting integration
-- Foundry Agent Service orchestration
+- Real Azure AI Foundry Agent Service orchestration
 - CMMS or maintenance system integration
 
 ## Suggested Future API Routes
 
-These are proposed routes only. They are not implemented yet.
+These are proposed routes only. Agents API routes are already implemented separately above.
 
 ```text
 GET  /api/assets
-GET  /api/agents
-POST /api/agents/run
-GET  /api/agents/logs
 GET  /api/recommendations
 POST /api/recommendations/{id}/approve
 ```

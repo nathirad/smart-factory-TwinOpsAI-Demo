@@ -1,4 +1,4 @@
-import type { AnalyzeApiResponse, DigitalTwinApiResponse, TelemetryApiResponse } from "./types";
+import type { AgentsApiResponse, AnalyzeApiResponse, DigitalTwinApiResponse, TelemetryApiResponse } from "./types";
 
 function joinUrl(base: string, path: string): string {
   const b = base.endsWith("/") ? base.slice(0, -1) : base;
@@ -27,6 +27,16 @@ export async function fetchDigitalTwin(baseUrl: string): Promise<DigitalTwinApiR
 export async function fetchAnalyze(baseUrl: string): Promise<AnalyzeApiResponse> {
   const res = await fetch(joinUrl(baseUrl, "/api/analyze"));
   return readJson<AnalyzeApiResponse>(res);
+}
+
+export async function fetchAgents(baseUrl: string): Promise<AgentsApiResponse> {
+  const res = await fetch(joinUrl(baseUrl, "/api/agents"));
+  return readJson<AgentsApiResponse>(res);
+}
+
+export async function postRunAgents(baseUrl: string): Promise<AgentsApiResponse> {
+  const res = await fetch(joinUrl(baseUrl, "/api/agents/run"), { method: "POST" });
+  return readJson<AgentsApiResponse>(res);
 }
 
 export async function postTriggerAnomaly(baseUrl: string): Promise<void> {

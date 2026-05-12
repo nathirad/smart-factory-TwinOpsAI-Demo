@@ -12,6 +12,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from features.agents_api import register_agents_routes
+
 try:
     from openai import OpenAI
 except ImportError:
@@ -157,6 +159,9 @@ app_state = {
     "latest_ingested_data": None,
     "work_orders": {},
     "next_work_order_sequence": 1,
+    # Agents API feature: stores the simulated Azure multi-agent cascade state in memory for the demo.
+    "agent_cascade_started": False,
+    "agent_cascade_last_run": None,
 }
 
 
@@ -657,6 +662,9 @@ async def ingest_telemetry(payload: IngestPayload):
     if payload.data.status == "Critical":
         app_state["is_anomaly_active"] = True
         app_state["anomaly_start_time"] = payload.timestamp
+        # Agents API feature: critical telemetry starts the simulated agent cascade alongside the anomaly scenario.
+        app_state["agent_cascade_started"] = True
+        app_state["agent_cascade_last_run"] = now_string()
 
     return {
         "status": "received",
@@ -683,6 +691,9 @@ async def get_telemetry():
 async def trigger_anomaly():
     app_state["is_anomaly_active"] = True
     app_state["anomaly_start_time"] = now_string()
+    # Agents API feature: manual anomaly trigger also starts the simulated Azure agent cascade.
+    app_state["agent_cascade_started"] = True
+    app_state["agent_cascade_last_run"] = app_state["anomaly_start_time"]
 
     return {
         "Message": "Anomaly simulation triggered. Dashboard will spike.",
@@ -696,10 +707,17 @@ async def reset_anomaly():
     app_state["latest_ingested_data"] = None
     app_state["work_orders"] = {}
     app_state["next_work_order_sequence"] = 1
+    # Agents API feature: reset clears only the agent cascade demo state; no existing telemetry logic is removed.
+    app_state["agent_cascade_started"] = False
+    app_state["agent_cascade_last_run"] = None
 
     return {
         "Message": "Anomaly simulation reset to normal state.",
     }
+
+
+# Agents API feature: registers isolated routes for the simulated Microsoft Azure multi-agent cascade.
+register_agents_routes(app, app_state)
 
 
 @app.get("/api/digital-twin")
