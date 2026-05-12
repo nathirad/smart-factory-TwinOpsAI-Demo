@@ -6,6 +6,7 @@ import type {
   DigitalTwinApiResponse,
   ReportsApiResponse,
   TelemetryApiResponse,
+  TwinDependenciesApiResponse,
   WorkOrderApiResponse,
   WorkOrderApprovalRequest,
   WorkOrderCreateRequest,
@@ -111,4 +112,15 @@ export async function postDispatchWorkOrder(baseUrl: string, workOrderId: string
     body: JSON.stringify(payload ?? {}),
   });
   return readJson<WorkOrderApiResponse>(res);
+}
+
+
+export async function fetchTwinDependencies(
+  baseUrl: string,
+  twinId: string
+): Promise<TwinDependenciesApiResponse> {
+  const res = await fetch(
+    joinUrl(baseUrl, `/api/twins/${encodeURIComponent(twinId)}/dependencies`)
+  );
+  return readJson<TwinDependenciesApiResponse>(res);
 }

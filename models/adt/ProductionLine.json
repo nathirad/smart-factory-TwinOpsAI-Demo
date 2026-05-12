@@ -1,0 +1,23 @@
+{
+  "@id": "dtmi:twinopsai:ProductionLine;1",
+  "@type": "Interface",
+  "@context": "dtmi:dtdl:context;2",
+  "displayName": "ProductionLine",
+  "contents": [
+    {
+      "@type": "Property",
+      "name": "name",
+      "schema": "string"
+    },
+    {
+      "@type": "Property",
+      "name": "status",
+      "schema": "string"
+    },
+    {
+      "@type": "Relationship",
+      "name": "contains",
+      "target": "dtmi:twinopsai:Machine;1"
+    }
+  ]
+}

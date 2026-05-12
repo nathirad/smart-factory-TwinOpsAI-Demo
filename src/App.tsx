@@ -1,3 +1,4 @@
+import { DigitalTwinImpactPanel } from "./components/DigitalTwinImpactPanel";
 import { useMemo, useState, type ReactNode } from "react";
 import type {
   AnalyzeApiResponse,
@@ -295,6 +296,7 @@ function apiAlertToAlert(alert: ApiAlert): Alert {
 
 export default function App() {
   const {
+    baseUrl,
     pollError,
     actionError,
     clearActionError,
@@ -463,7 +465,7 @@ export default function App() {
               />
             ) : null}
             {activePage === "digital-twin" ? (
-              <DigitalTwinPage assets={assets} alert={activeAlert} anomalyActive={anomalyActive} twin={digitalTwin} />
+              <DigitalTwinPage baseUrl={baseUrl}assets={assets} alert={activeAlert} anomalyActive={anomalyActive} twin={digitalTwin} />
             ) : null}
             {activePage === "agents" ? <AgentsPage agents={agents} executionLog={executionLog} anomalyActive={anomalyActive} agentsApiMode={agentsApi?.mode ?? "local-fallback"} onRunCascade={runAgentCascade} /> : null}
             {activePage === "recommendations" ? (
@@ -776,11 +778,13 @@ function downstreamDetailToStatus(detail: string): AssetStatus {
 }
 
 function DigitalTwinPage({
+  baseUrl,
   assets,
   alert,
   anomalyActive,
   twin,
 }: {
+  baseUrl: string;
   assets: Asset[];
   alert: Alert;
   anomalyActive: boolean;
@@ -850,7 +854,9 @@ function DigitalTwinPage({
         </div>
       </div>
 
-      <InfoBand text="This digital twin view reflects GET /api/digital-twin from the demo backend; full Azure Digital Twins integration is future work." />
+            <div className="mt-4">
+        <DigitalTwinImpactPanel baseUrl={baseUrl} />
+      </div>
     </div>
   );
 }
