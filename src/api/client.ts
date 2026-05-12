@@ -1,6 +1,7 @@
 import type {
   AlertsApiResponse,
   AnalyzeApiResponse,
+  AgentsApiResponse,
   DashboardApiResponse,
   DigitalTwinApiResponse,
   ReportsApiResponse,
@@ -40,6 +41,15 @@ export async function fetchAnalyze(baseUrl: string): Promise<AnalyzeApiResponse>
   return readJson<AnalyzeApiResponse>(res);
 }
 
+export async function fetchAgents(baseUrl: string): Promise<AgentsApiResponse> {
+  const res = await fetch(joinUrl(baseUrl, "/api/agents"));
+  return readJson<AgentsApiResponse>(res);
+}
+
+export async function postRunAgents(baseUrl: string): Promise<AgentsApiResponse> {
+  const res = await fetch(joinUrl(baseUrl, "/api/agents/run"), { method: "POST" });
+  return readJson<AgentsApiResponse>(res);
+}
 export async function fetchDashboard(baseUrl: string): Promise<DashboardApiResponse> {
   const res = await fetch(joinUrl(baseUrl, "/api/dashboard"));
   return readJson<DashboardApiResponse>(res);

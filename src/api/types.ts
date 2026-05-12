@@ -43,6 +43,45 @@ export interface AnalyzeApiResponse {
   retrieved_sop?: AnalyzeRetrievedSop;
 }
 
+/** Backend GET /api/agents */
+export type AgentApiStatus = "completed" | "in-progress" | "pending" | "not-started";
+
+export interface AgentApiStep {
+  id: string;
+  order: number;
+  name: string;
+  role: string;
+  status: AgentApiStatus;
+  summary: string;
+  elapsed: string;
+  tone: "blue" | "purple" | "orange" | "green";
+  azure_service: string;
+}
+
+export interface AgentApiExecutionLog {
+  id: string;
+  agent: string;
+  time: string;
+  message: string;
+  status: AgentApiStatus;
+  azure_service: string;
+}
+
+export interface AgentsApiResponse {
+  run_id: string;
+  mode: string;
+  anomaly_active: boolean;
+  cascade_status: "standby" | "completed";
+  orchestrator: {
+    name: string;
+    description: string;
+  };
+  azure_architecture: string[];
+  agents: AgentApiStep[];
+  execution_log: AgentApiExecutionLog[];
+  recommended_next_action: string;
+  generated_at: string;
+}
 export interface ApiMetricPoint {
   [key: string]: string | number;
 }

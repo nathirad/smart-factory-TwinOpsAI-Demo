@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  fetchAgents,
   fetchAnalyze,
   fetchAlerts,
   fetchDashboard,
@@ -10,12 +11,14 @@ import {
   postApproveWorkOrder,
   postCreateWorkOrder,
   postDispatchWorkOrder,
+  postRunAgents,
   postResetAnomaly,
   postTriggerAnomaly,
 } from "../api/client";
 import type {
   AlertsApiResponse,
   AnalyzeApiResponse,
+  AgentsApiResponse,
   DashboardApiResponse,
   DigitalTwinApiResponse,
   ReportsApiResponse,
@@ -107,6 +110,7 @@ export function useTwinOpsBackend(pollMs = 3000) {
   const [telemetry, setTelemetry] = useState<TelemetryApiResponse | null>(null);
   const [digitalTwin, setDigitalTwin] = useState<DigitalTwinApiResponse | null>(null);
   const [analyze, setAnalyze] = useState<AnalyzeApiResponse | null>(null);
+  const [agentsApi, setAgentsApi] = useState<AgentsApiResponse | null>(null);
   const [dashboard, setDashboard] = useState<DashboardApiResponse | null>(null);
   const [alerts, setAlerts] = useState<AlertsApiResponse | null>(null);
   const [reports, setReports] = useState<ReportsApiResponse | null>(null);
@@ -117,25 +121,26 @@ export function useTwinOpsBackend(pollMs = 3000) {
 
   const refresh = useCallback(async () => {
     try {
-      const [tel, twin, ann] = await Promise.all([
+      const [tel, twin, ann, agents, dash, alertQueue, reportData, orders] = await Promise.all([
         fetchTelemetry(baseUrl),
         fetchDigitalTwin(baseUrl),
         fetchAnalyze(baseUrl),
+        fetchAgents(baseUrl), 
+        fetchDashboard(baseUrl), 
+        fetchAlerts(baseUrl), 
+        fetchReports(baseUrl),   
+        fetchWorkOrders(baseUrl),
       ]);
+
       setTelemetry(tel);
       setDigitalTwin(twin);
       setAnalyze(ann);
-
-      const [dash, alertQueue, reportData, orders] = await Promise.all([
-        fetchDashboard(baseUrl),
-        fetchAlerts(baseUrl),
-        fetchReports(baseUrl),
-        fetchWorkOrders(baseUrl),
-      ]);
+      setAgentsApi(agents);
       setDashboard(dash);
       setAlerts(alertQueue);
       setReports(reportData);
       setWorkOrders(orders);
+
       setPollError(null);
       setReady(true);
     } catch (e) {
@@ -180,6 +185,14 @@ export function useTwinOpsBackend(pollMs = 3000) {
     }
   }, [baseUrl, refresh]);
 
+  const runAgents = useCallback(async () => {
+    setActionError(null);
+    try {
+      const agents = await postRunAgents(baseUrl);
+      setAgentsApi(agents);
+      await refresh();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Agent run failed");
   const createWorkOrder = useCallback(async () => {
     setActionError(null);
     try {
@@ -240,6 +253,7 @@ export function useTwinOpsBackend(pollMs = 3000) {
     telemetry,
     digitalTwin,
     analyze,
+    agentsApi,
     dashboard,
     alerts,
     reports,
@@ -249,6 +263,7 @@ export function useTwinOpsBackend(pollMs = 3000) {
     refresh,
     triggerAnomaly,
     resetAnomaly,
+    runAgents,
     createWorkOrder,
     approveWorkOrder,
     dispatchWorkOrder,
