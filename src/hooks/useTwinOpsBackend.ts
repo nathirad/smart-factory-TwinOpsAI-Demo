@@ -245,15 +245,16 @@ export function useTwinOpsBackend(pollMs = 3000) {
 
   const runAgents = useCallback(async () => {
     setActionError(null);
+
     try {
       const agents = await postRunAgents(baseUrl);
       setAgentsApi(agents);
       await refresh();
-    } catch (e) {
+      return agents;
+      }  catch (e) {
       setActionError(e instanceof Error ? e.message : "Agent run failed");
       throw e;
-    }
-      throw e;}
+      }
   }, [baseUrl, refresh]);
 
   const createWorkOrder = useCallback(async () => {
