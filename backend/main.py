@@ -2,10 +2,12 @@ import glob
 import json
 import os
 import random
+import asyncio
 from datetime import datetime
 from typing import Literal
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+from fastapi.responses import StreamingResponse
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -929,6 +931,34 @@ async def get_live_telemetry():
         "status": "ok",
         "data": telemetry,
     }
+
+@app.get("/api/telemetry/stream")
+async def stream_live_telemetry():
+    async def event_generator():
+        while True:
+            telemetry = get_latest_telemetry()
+
+            if telemetry is None:
+                payload = {
+                    "source": "azure-iot-hub",
+                    "status": "waiting",
+                    "message": "No telemetry received yet. Start the device simulator first.",
+                    "data": None,
+                }
+            else:
+                payload = {
+                    "source": "azure-iot-hub",
+                    "status": "ok",
+                    "data": telemetry,
+                }
+
+            yield f"data: {json.dumps(payload, default=str)}\n\n"
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+    )
 
 @app.get("/api/reports")
 async def get_reports():
