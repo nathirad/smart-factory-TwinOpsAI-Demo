@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Literal
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+from services.adt_service import get_twin_dependencies
 from fastapi.responses import StreamingResponse
 
 from dotenv import load_dotenv
@@ -721,6 +722,12 @@ async def reset_anomaly():
 # Agents API feature: registers isolated routes for the simulated Microsoft Azure multi-agent cascade.
 register_agents_routes(app, app_state)
 
+@app.get("/api/twins/{twin_id}/dependencies")
+async def get_twin_dependencies_api(twin_id: str):
+    try:
+        return get_twin_dependencies(twin_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 @app.get("/api/digital-twin")
 async def get_digital_twin():

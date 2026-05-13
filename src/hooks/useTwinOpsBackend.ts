@@ -251,6 +251,8 @@ export function useTwinOpsBackend(pollMs = 3000) {
       await refresh();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Agent run failed");
+      throw e;
+    }
       throw e;}
   }, [baseUrl, refresh]);
 

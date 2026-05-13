@@ -6,3 +6,5 @@ azure-core>=1.30.0,<2.0.0
 azure-search-documents>=11.5.0,<12.0.0
 requests>=2.32.0,<3.0.0
 azure-eventhub
+azure-identity
+azure-digitaltwins-core

@@ -1,0 +1,48 @@
+{
+  "@id": "dtmi:twinopsai:Machine;1",
+  "@type": "Interface",
+  "@context": "dtmi:dtdl:context;2",
+  "displayName": "Machine",
+  "contents": [
+    {
+      "@type": "Property",
+      "name": "name",
+      "schema": "string"
+    },
+    {
+      "@type": "Property",
+      "name": "machineType",
+      "schema": "string"
+    },
+    {
+      "@type": "Property",
+      "name": "healthScore",
+      "schema": "double"
+    },
+    {
+      "@type": "Property",
+      "name": "vibration",
+      "schema": "double"
+    },
+    {
+      "@type": "Property",
+      "name": "temperature",
+      "schema": "double"
+    },
+    {
+      "@type": "Property",
+      "name": "energyLoad",
+      "schema": "double"
+    },
+    {
+      "@type": "Property",
+      "name": "status",
+      "schema": "string"
+    },
+    {
+      "@type": "Relationship",
+      "name": "feeds",
+      "target": "dtmi:twinopsai:Machine;1"
+    }
+  ]
+}

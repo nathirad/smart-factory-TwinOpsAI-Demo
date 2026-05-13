@@ -274,3 +274,33 @@ export interface ReportsApiResponse {
     }[];
   };
 }
+
+/** Backend GET /api/twins/{twinId}/dependencies */
+export interface TwinDependencyNode {
+  id: string;
+  model?: string;
+  name?: string;
+  machineType?: string;
+  location?: string | null;
+  status?: string;
+  healthScore?: number;
+  vibration?: number;
+  temperature?: number;
+  energyLoad?: number;
+}
+
+export interface TwinDependencyEdge {
+  sourceId: string;
+  relationshipId: string;
+  relationshipName: string;
+  targetId: string;
+  depth: number;
+}
+
+export interface TwinDependenciesApiResponse {
+  source: string;
+  twinId: string;
+  root: TwinDependencyNode;
+  dependencies: TwinDependencyNode[];
+  graph: TwinDependencyEdge[];
+}
