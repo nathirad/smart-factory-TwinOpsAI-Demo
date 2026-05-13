@@ -11,7 +11,7 @@ from services.adt_service import get_twin_dependencies
 from fastapi.responses import StreamingResponse
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -674,6 +674,38 @@ async def ingest_telemetry(payload: IngestPayload):
         "server_received_time": now_string(),
     }
 
+@app.post("/api/adt/events")
+async def receive_adt_events(request: Request):
+    events = await request.json()
+
+    if isinstance(events, dict):
+        events = [events]
+
+    if not isinstance(events, list):
+        raise HTTPException(status_code=400, detail="Invalid Event Grid payload")
+
+    # 1) Event Grid validation handshake
+    for event in events:
+        if event.get("eventType") == "Microsoft.EventGrid.SubscriptionValidationEvent":
+            validation_code = event.get("data", {}).get("validationCode")
+
+            if not validation_code:
+                raise HTTPException(status_code=400, detail="Missing validationCode")
+
+            return {
+                "validationResponse": validation_code
+            }
+
+    # 2) Normal Azure Digital Twins events
+    for event in events:
+        print("Received ADT Event Grid event:")
+        print(event)
+
+    return {
+        "status": "ok",
+        "source": "azure-digital-twins-event-grid",
+        "received": len(events)
+    }
 
 @app.get("/api/telemetry")
 async def get_telemetry():
