@@ -124,3 +124,48 @@ export async function fetchTwinDependencies(
   );
   return readJson<TwinDependenciesApiResponse>(res);
 }
+export type LiveTelemetry = {
+  deviceId: string;
+  timestamp: string;
+  vibration: number;
+  temperature: number;
+  energyLoad: number;
+  status: string;
+};
+
+export type TelemetryStreamPayload = {
+  source: string;
+  status: "ok" | "waiting" | "error";
+  message?: string;
+  data: LiveTelemetry | null;
+};
+
+export function subscribeTelemetryStream(
+  baseUrl: string,
+  onTelemetry: (data: LiveTelemetry) => void,
+  onStatus?: (payload: TelemetryStreamPayload) => void,
+  onError?: (error: Event) => void
+): () => void {
+  const eventSource = new EventSource(
+    joinUrl(baseUrl, "/api/telemetry/stream")
+  );
+
+  eventSource.onmessage = (event) => {
+    const payload: TelemetryStreamPayload = JSON.parse(event.data);
+
+    onStatus?.(payload);
+
+    if (payload.status === "ok" && payload.data) {
+      onTelemetry(payload.data);
+    }
+  };
+
+  eventSource.onerror = (error) => {
+    console.error("SSE telemetry stream error:", error);
+    onError?.(error);
+  };
+
+  return () => {
+    eventSource.close();
+  };
+}

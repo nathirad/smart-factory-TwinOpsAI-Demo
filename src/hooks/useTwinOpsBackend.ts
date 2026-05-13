@@ -1,3 +1,5 @@
+import type { LiveTelemetry } from "../api/client";
+import { useTelemetryStream } from "./useTelemetryStream";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchAgents,
@@ -100,6 +102,48 @@ export function telemetryToAssets(t: TelemetryApiResponse): Asset[] {
   ];
 }
 
+function normalizeLiveStatus(status: string): string {
+  const s = status.toLowerCase();
+
+  if (s.includes("critical") || s.includes("fault")) return "Critical";
+  if (s.includes("warn")) return "Warning";
+
+  return "Normal";
+}
+
+function liveTelemetryToTelemetryApiResponse(
+  live: LiveTelemetry,
+  previous: TelemetryApiResponse | null
+): TelemetryApiResponse {
+  const liveStatus = normalizeLiveStatus(live.status);
+
+  return {
+    timestamp: live.timestamp,
+
+    motor_A: {
+      vibration: live.vibration,
+      temperature: live.temperature,
+      load: live.energyLoad,
+      status: liveStatus,
+    },
+
+    motor_B: {
+      vibration: Number((live.vibration * 0.72).toFixed(2)),
+      temperature: Number((live.temperature - 10).toFixed(1)),
+      load: Number((live.energyLoad * 0.85).toFixed(1)),
+      status: liveStatus === "Critical" ? "Warning" : "Normal",
+    },
+
+    conveyor_C: {
+      vibration: Number((live.vibration * 0.55).toFixed(2)),
+      temperature: Number((live.temperature - 14).toFixed(1)),
+      load: Number((live.energyLoad * 0.75).toFixed(1)),
+      status: "Normal",
+    },
+  } as TelemetryApiResponse;
+}
+
+
 export function parseConfidencePercent(score: string): number {
   const n = parseInt(score.replace(/\D/g, ""), 10);
   return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
@@ -117,7 +161,9 @@ export function useTwinOpsBackend(pollMs = 3000) {
   const [workOrders, setWorkOrders] = useState<WorkOrderApiResponse[]>([]);
   const [pollError, setPollError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [ready, setReady] = useState(false);
+  const [ready, setReady] = useState(false);	
+  const { latestTelemetry, streamStatus } = useTelemetryStream(baseUrl);
+  const streamIsLive = streamStatus === "ok";
 
   const refresh = useCallback(async () => {
     try {
@@ -132,7 +178,9 @@ export function useTwinOpsBackend(pollMs = 3000) {
         fetchWorkOrders(baseUrl),
       ]);
 
-      setTelemetry(tel);
+      if (!streamIsLive) {
+        setTelemetry(tel);
+      }
       setDigitalTwin(twin);
       setAnalyze(ann);
       setAgentsApi(agents);
@@ -147,7 +195,7 @@ export function useTwinOpsBackend(pollMs = 3000) {
       const msg = e instanceof Error ? e.message : "Backend unreachable";
       setPollError(msg);
     }
-  }, [baseUrl]);
+  }, [baseUrl, streamIsLive]);
 
   useEffect(() => {
     void refresh();
@@ -155,6 +203,16 @@ export function useTwinOpsBackend(pollMs = 3000) {
     return () => window.clearInterval(id);
   }, [refresh, pollMs]);
 
+  useEffect(() => {
+    if (!latestTelemetry) return;
+
+    setTelemetry((previous) =>
+      liveTelemetryToTelemetryApiResponse(latestTelemetry, previous)
+    );
+
+    setPollError(null);
+    setReady(true);
+  }, [latestTelemetry]);
   const anomalyActive = telemetry?.motor_A?.status === "Critical";
 
   const assets: Asset[] = useMemo(() => {
@@ -195,6 +253,7 @@ export function useTwinOpsBackend(pollMs = 3000) {
       setActionError(e instanceof Error ? e.message : "Agent run failed");
       throw e;
     }
+      throw e;}
   }, [baseUrl, refresh]);
 
   const createWorkOrder = useCallback(async () => {
