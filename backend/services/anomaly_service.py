@@ -1,141 +1,174 @@
 import os
-import uuid
-from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-try:
-    from azure.cosmos import CosmosClient
-except Exception:
-    CosmosClient = None
+import requests
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
-def _severity_from_score(score: float) -> str:
-    if score >= 0.85:
-        return "High"
-    if score >= 0.65:
-        return "Medium"
-    if score >= 0.45:
-        return "Low"
-    return "Normal"
-
-
-def detect_anomaly_from_snapshot(telemetry: Dict[str, Any]) -> Dict[str, Any]:
+def build_anomaly_batch_from_telemetry(telemetry: Dict[str, Any]) -> List[Dict[str, Any]]:
     motor_a = telemetry.get("motor_A", {})
 
-    vibration = float(motor_a.get("vibration", 0) or 0)
-    temperature = float(motor_a.get("temperature", 0) or 0)
-    load = float(motor_a.get("load", motor_a.get("energyLoad", 0)) or 0)
-    status = str(motor_a.get("status", "Normal"))
+    return [
+        {
+            "timestamp": telemetry.get("timestamp"),
+            "machineId": "motor-A",
+            "vibration": _to_float(motor_a.get("vibration")),
+            "temperature": _to_float(motor_a.get("temperature")),
+            "load": _to_float(motor_a.get("load")),
+            "energyLoad": _to_float(motor_a.get("energyLoad", motor_a.get("load"))),
+            "status": motor_a.get("status", "Normal"),
+        }
+    ]
 
-    contributing_factors: List[Dict[str, Any]] = []
 
-    vibration_score = min(vibration / 4.0, 1.0)
-    temperature_score = min(max((temperature - 60) / 25, 0), 1.0)
-    load_score = min(max((load - 60) / 40, 0), 1.0)
+def infer_contributing_factors_from_batch(batch: List[Dict[str, Any]]) -> List[str]:
+    latest = batch[-1] if batch else {}
 
-    if vibration >= 3.2:
-        contributing_factors.append({
-            "metric": "vibration",
-            "value": vibration,
-            "reason": "Vibration is above safe operating baseline",
-            "score": round(vibration_score, 3),
-        })
+    vibration = _to_float(latest.get("vibration"))
+    temperature = _to_float(latest.get("temperature"))
+    load = _to_float(latest.get("energyLoad", latest.get("load")))
+    status = str(latest.get("status", "")).lower()
+
+    factors: List[str] = []
+
+    if vibration >= 3.0:
+        factors.append("vibration")
 
     if temperature >= 78:
-        contributing_factors.append({
-            "metric": "temperature",
-            "value": temperature,
-            "reason": "Temperature is elevated",
-            "score": round(temperature_score, 3),
-        })
+        factors.append("temperature")
 
     if load >= 85:
-        contributing_factors.append({
-            "metric": "load",
-            "value": load,
-            "reason": "Energy/load is operating at high level",
-            "score": round(load_score, 3),
-        })
+        factors.append("energyLoad")
 
-    score = max(vibration_score, temperature_score, load_score)
-    is_anomaly = bool(contributing_factors) or status.lower() in ["critical", "warning"]
-    severity = _severity_from_score(score) if is_anomaly else "Normal"
+    if status in ["critical", "warning"] and not factors:
+        factors.append("machineStatus")
+
+    return factors
+
+
+def detect_anomaly_local_fallback(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+    latest = batch[-1] if batch else {}
+
+    vibration = _to_float(latest.get("vibration"))
+    temperature = _to_float(latest.get("temperature"))
+    load = _to_float(latest.get("energyLoad", latest.get("load")))
+
+    factors = infer_contributing_factors_from_batch(batch)
+    is_anomaly = len(factors) > 0
+
+    if vibration >= 3.5 or temperature >= 82 or load >= 90:
+        severity = "High"
+        score = 0.95
+    elif is_anomaly:
+        severity = "Medium"
+        score = 0.7
+    else:
+        severity = "Low"
+        score = 0.1
 
     return {
-        "id": str(uuid.uuid4()),
-        "machineId": "motor-A",
-        "source": "backend-rule-anomaly-detector",
-        "timestamp": telemetry.get("timestamp") or _now_iso(),
-        "createdAt": _now_iso(),
         "isAnomaly": is_anomaly,
         "severity": severity,
-        "score": round(score, 3),
-        "status": status,
-        "telemetry": {
-            "vibration": vibration,
-            "temperature": temperature,
-            "load": load,
-        },
-        "contributingFactors": contributing_factors,
-        "agentEvent": {
-            "shouldTrigger": is_anomaly,
-            "eventType": "agent.orchestrator.anomaly.detected" if is_anomaly else None,
-            "targetPhase": "Phase 5",
-        },
+        "contributingFactors": factors,
+        "score": score,
+        "source": "local-fallback-detector",
     }
 
 
-def _get_container():
-    if CosmosClient is None:
-        return None
+def detect_anomaly_from_telemetry(telemetry: Dict[str, Any]) -> Dict[str, Any]:
+    batch = build_anomaly_batch_from_telemetry(telemetry)
 
-    endpoint = os.getenv("COSMOS_ENDPOINT")
-    key = os.getenv("COSMOS_KEY")
-    database_name = os.getenv("COSMOS_DB", "twinopsai")
-    container_name = os.getenv("COSMOS_CONTAINER", "anomalyEvents")
+    endpoint = os.getenv("AZURE_ML_ANOMALY_ENDPOINT") or os.getenv("AZURE_ML_SCORING_URI")
+    key = os.getenv("AZURE_ML_ANOMALY_KEY") or os.getenv("AZURE_ML_ENDPOINT_KEY")
+    deployment_name = os.getenv("AZURE_ML_DEPLOYMENT_NAME")
 
     if not endpoint or not key:
-        return None
+        return detect_anomaly_local_fallback(batch)
 
-    client = CosmosClient(endpoint, credential=key)
-    database = client.get_database_client(database_name)
-    return database.get_container_client(container_name)
-
-
-def save_anomaly_event(event: Dict[str, Any]) -> Dict[str, Any]:
-    container = _get_container()
-
-    if container is None:
-        return {
-            "stored": False,
-            "reason": "Cosmos DB env is missing or azure-cosmos is not installed",
+    try:
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
         }
 
-    container.upsert_item(event)
+        if deployment_name:
+            headers["azureml-model-deployment"] = deployment_name
 
-    return {
-        "stored": True,
-        "database": os.getenv("COSMOS_DB", "twinopsai"),
-        "container": os.getenv("COSMOS_CONTAINER", "anomalyEvents"),
-    }
+        response = requests.post(
+            endpoint,
+            headers=headers,
+            json={
+                "series": batch,
+                "data": batch,
+                "telemetry": telemetry,
+            },
+            timeout=30,
+        )
 
+        response.raise_for_status()
+        raw = response.json()
 
-def list_anomaly_events(limit: int = 20) -> List[Dict[str, Any]]:
-    container = _get_container()
+        if isinstance(raw, list) and raw:
+            raw = raw[0]
 
-    if container is None:
-        return []
+        if isinstance(raw, dict) and isinstance(raw.get("result"), dict):
+            raw = raw["result"]
 
-    query = "SELECT * FROM c ORDER BY c.createdAt DESC OFFSET 0 LIMIT @limit"
+        if not isinstance(raw, dict):
+            raw = {}
 
-    items = container.query_items(
-        query=query,
-        parameters=[{"name": "@limit", "value": limit}],
-        enable_cross_partition_query=True,
-    )
+        ml_factors = (
+            raw.get("contributingFactors")
+            or raw.get("contributing_factors")
+            or raw.get("factors")
+            or []
+        )
 
-    return list(items)
+        rule_factors = infer_contributing_factors_from_batch(batch)
+        factors = ml_factors if len(ml_factors) > 0 else rule_factors
+
+        is_anomaly = (
+            bool(raw.get("isAnomaly", False))
+            or bool(raw.get("is_anomaly", False))
+            or len(factors) > 0
+        )
+
+        latest = batch[-1] if batch else {}
+        vibration = _to_float(latest.get("vibration"))
+        temperature = _to_float(latest.get("temperature"))
+        load = _to_float(latest.get("energyLoad", latest.get("load")))
+
+        severity = raw.get("severity")
+
+        if not severity or severity in ["Normal", "Low"]:
+            if is_anomaly:
+                if vibration >= 3.5 or temperature >= 82 or load >= 90:
+                    severity = "High"
+                else:
+                    severity = "Medium"
+            else:
+                severity = "Low"
+
+        score = raw.get("score")
+        if score is None:
+            score = 0.95 if is_anomaly else 0.1
+
+        return {
+            "isAnomaly": is_anomaly,
+            "severity": severity,
+            "contributingFactors": factors,
+            "score": score,
+            "source": "azure-ml-managed-endpoint",
+        }
+
+    except Exception as e:
+        fallback = detect_anomaly_local_fallback(batch)
+        fallback["source"] = "local-fallback-after-azure-ml-error"
+        fallback["azureMlError"] = str(e)
+        return fallback

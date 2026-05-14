@@ -9,6 +9,8 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 from services.adt_service import get_twin_dependencies
 from fastapi.responses import StreamingResponse
+from services.anomaly_service import detect_anomaly_from_telemetry
+from services.azure_ml_service import azure_ml_enabled, detect_with_azure_ml
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Query
@@ -16,6 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from services.cosmos_service import save_anomaly_result, list_anomaly_results, cosmos_enabled
 from features.agents_api import register_agents_routes
+from services.azure_ml_service import azure_ml_enabled, detect_with_azure_ml
+from services.cosmos_service import cosmos_enabled, save_anomaly_result
 
 try:
     from openai import OpenAI
@@ -1118,48 +1122,37 @@ async def get_anomaly_results(machineId: str | None = None, limit: int = 20):
 
 @app.post("/api/anomaly/detect")
 async def detect_anomaly():
-    telemetry = build_telemetry_snapshot()
+    try:
+        telemetry = build_telemetry_snapshot()
 
-    motor_a = telemetry.get("motor_A", {})
-    vibration = float(motor_a.get("vibration", 0))
-    temperature = float(motor_a.get("temperature", 0))
-    load = float(motor_a.get("load", 0))
+        detection = detect_anomaly_from_telemetry(telemetry)
 
-    contributing_factors = []
+        motor_a = telemetry.get("motor_A", {})
 
-    if vibration >= 3.0:
-        contributing_factors.append("vibration")
-    if temperature >= 78:
-        contributing_factors.append("temperature")
-    if load >= 85:
-        contributing_factors.append("energyLoad")
+        result = save_anomaly_result(
+            machine_id="motor-A",
+            telemetry=motor_a,
+            is_anomaly=detection.get("isAnomaly", False),
+            severity=detection.get("severity", "Low"),
+            contributing_factors=detection.get("contributingFactors", []),
+            source=detection.get("source", "azure-ml-managed-endpoint"),
+            agent_triggered=detection.get("isAnomaly", False),
+        )
 
-    is_anomaly = len(contributing_factors) > 0
+        return {
+            "status": "ok",
+            "cosmosEnabled": cosmos_enabled(),
+            "detection": detection,
+            "result": result,
+            "agentTrigger": {
+                "enabled": detection.get("isAnomaly", False),
+                "target": "phase-5-agent-orchestrator",
+                "reason": "anomaly detected" if detection.get("isAnomaly", False) else "normal telemetry",
+            },
+        }
 
-    if vibration >= 3.5 or temperature >= 82 or load >= 90:
-        severity = "High"
-    elif is_anomaly:
-        severity = "Medium"
-    else:
-        severity = "Low"
-
-    result = save_anomaly_result(
-        machine_id="motor-A",
-        telemetry=motor_a,
-        is_anomaly=is_anomaly,
-        severity=severity,
-        contributing_factors=contributing_factors,
-        source="phase-4-mvp-anomaly-detector",
-        agent_triggered=is_anomaly,
-    )
-
-    return {
-        "status": "ok",
-        "cosmosEnabled": cosmos_enabled(),
-        "result": result,
-        "agentTrigger": {
-            "enabled": is_anomaly,
-            "target": "phase-5-agent-orchestrator",
-            "reason": "anomaly detected" if is_anomaly else "normal telemetry",
-        },
-    }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Anomaly detection failed: {type(e).__name__}: {str(e)}",
+        )

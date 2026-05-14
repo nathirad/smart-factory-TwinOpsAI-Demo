@@ -168,3 +168,41 @@ export interface RoadmapPhase {
   description: string;
   risk: string;
 }
+
+export type AnomalyFactor =
+  | string
+  | {
+      metric?: string;
+      name?: string;
+      value?: number | string;
+      reason?: string;
+    };
+
+export interface AnomalyTelemetrySnapshot {
+  vibration?: number;
+  temperature?: number;
+  load?: number;
+  energyLoad?: number;
+  status?: string;
+}
+
+export interface AnomalyResultApiResponse {
+  id: string;
+  machineId?: string;
+  createdAt?: string;
+  telemetry?: AnomalyTelemetrySnapshot;
+  isAnomaly?: boolean;
+  severity?: "Low" | "Medium" | "High" | string;
+  contributingFactors?: AnomalyFactor[];
+  source?: string;
+  agentTriggered?: boolean;
+  cosmosSaved?: boolean;
+}
+
+export interface AnomalyResultsApiResponse {
+  status: string;
+  source?: string;
+  cosmosEnabled?: boolean;
+  count: number;
+  results: AnomalyResultApiResponse[];
+}

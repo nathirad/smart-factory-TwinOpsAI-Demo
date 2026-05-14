@@ -1,30 +1,25 @@
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 try:
     from azure.cosmos import CosmosClient, PartitionKey
-except Exception:
+except ImportError:
     CosmosClient = None
     PartitionKey = None
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _get_container():
-    if CosmosClient is None or PartitionKey is None:
-        return None
-
     endpoint = os.getenv("COSMOS_ENDPOINT")
     key = os.getenv("COSMOS_KEY")
-
     database_name = os.getenv("COSMOS_DB", "twinopsai-anomaly-db")
     container_name = os.getenv("COSMOS_CONTAINER", "anomaly-results")
 
     if not endpoint or not key:
+        return None
+
+    if CosmosClient is None or PartitionKey is None:
         return None
 
     client = CosmosClient(endpoint, credential=key)
@@ -40,7 +35,11 @@ def _get_container():
 
 
 def cosmos_enabled() -> bool:
-    return _get_container() is not None
+    try:
+        return _get_container() is not None
+    except Exception as e:
+        print(f"[cosmos] disabled/error: {e}")
+        return False
 
 
 def save_anomaly_result(
@@ -49,72 +48,81 @@ def save_anomaly_result(
     is_anomaly: bool,
     severity: str,
     contributing_factors: List[Any],
-    source: str = "phase-4-mvp-anomaly-detector",
-    agent_triggered: bool = False,
+    source: str,
+    agent_triggered: bool,
 ) -> Dict[str, Any]:
     item = {
         "id": str(uuid.uuid4()),
         "machineId": machine_id,
-        "timestamp": telemetry.get("timestamp") or _now_iso(),
-        "createdAt": _now_iso(),
-        "isAnomaly": is_anomaly,
-        "severity": severity,
-        "contributingFactors": contributing_factors,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
         "telemetry": telemetry,
+        "isAnomaly": bool(is_anomaly),
+        "severity": severity,
+        "contributingFactors": contributing_factors or [],
         "source": source,
-        "agentTrigger": {
-            "enabled": agent_triggered,
-            "target": "phase-5-agent-orchestrator",
-            "reason": "anomaly detected" if agent_triggered else "normal telemetry",
-        },
+        "agentTriggered": bool(agent_triggered),
+        "cosmosSaved": False,
     }
 
-    container = _get_container()
+    try:
+        container = _get_container()
 
-    if container is None:
-        item["stored"] = False
-        item["storeReason"] = "Cosmos DB env is missing or azure-cosmos is not installed"
+        if container is None:
+            item["cosmosError"] = "Cosmos is not configured or azure-cosmos is not installed"
+            return item
+
+        item["cosmosSaved"] = True
+        container.upsert_item(item)
         return item
 
-    container.upsert_item(item)
-    item["stored"] = True
-    return item
+    except Exception as e:
+        item["cosmosSaved"] = False
+        item["cosmosError"] = str(e)
+        print(f"[cosmos] save failed: {e}")
+        return item
 
 
-def list_anomaly_results(
-    machine_id: Optional[str] = None,
-    limit: int = 20,
-) -> List[Dict[str, Any]]:
-    container = _get_container()
+def list_anomaly_results(machine_id: str | None = None, limit: int = 20):
+    try:
+        container = _get_container()
 
-    if container is None:
+        if container is None:
+            return []
+
+        safe_limit = max(1, min(int(limit), 100))
+
+        if machine_id:
+            query = """
+            SELECT * FROM c
+            WHERE c.machineId = @machineId
+            ORDER BY c.createdAt DESC
+            """
+            parameters = [
+                {"name": "@machineId", "value": machine_id}
+            ]
+
+            items = list(
+                container.query_items(
+                    query=query,
+                    parameters=parameters,
+                    enable_cross_partition_query=True,
+                )
+            )
+        else:
+            query = """
+            SELECT * FROM c
+            ORDER BY c.createdAt DESC
+            """
+
+            items = list(
+                container.query_items(
+                    query=query,
+                    enable_cross_partition_query=True,
+                )
+            )
+
+        return items[:safe_limit]
+
+    except Exception as e:
+        print(f"[cosmos] list anomaly results failed: {e}")
         return []
-
-    if machine_id:
-        query = """
-        SELECT * FROM c
-        WHERE c.machineId = @machineId
-        ORDER BY c.createdAt DESC
-        OFFSET 0 LIMIT @limit
-        """
-        parameters = [
-            {"name": "@machineId", "value": machine_id},
-            {"name": "@limit", "value": limit},
-        ]
-    else:
-        query = """
-        SELECT * FROM c
-        ORDER BY c.createdAt DESC
-        OFFSET 0 LIMIT @limit
-        """
-        parameters = [
-            {"name": "@limit", "value": limit},
-        ]
-
-    items = container.query_items(
-        query=query,
-        parameters=parameters,
-        enable_cross_partition_query=True,
-    )
-
-    return list(items)
