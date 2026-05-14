@@ -34,3 +34,16 @@ __pycache__/
 *.log
 npm-debug.log*
 *.bak
+
+# local env / secrets
+.env
+.env.*
+!.env.example
+
+# python local
+backend/.venv/
+**/__pycache__/
+*.pyc
+
+# backup files
+*.bak

@@ -1,0 +1,10 @@
+{
+  "telemetry": {
+    "motor_A": {
+      "vibration": 3.6,
+      "temperature": 82.5,
+      "load": 91.2,
+      "status": "Critical"
+    }
+  }
+}

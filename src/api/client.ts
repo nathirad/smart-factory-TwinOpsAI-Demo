@@ -11,6 +11,8 @@ import type {
   WorkOrderApprovalRequest,
   WorkOrderCreateRequest,
   WorkOrderDispatchRequest,
+  AnomalyDetectApiResponse,
+  AnomalyResultsApiResponse,
 } from "./types";
 
 function joinUrl(base: string, path: string): string {
@@ -168,4 +170,16 @@ export function subscribeTelemetryStream(
   return () => {
     eventSource.close();
   };
+}
+
+export async function postDetectAnomaly(baseUrl: string): Promise<AnomalyDetectApiResponse> {
+  const res = await fetch(joinUrl(baseUrl, "/api/anomaly/detect"), {
+    method: "POST",
+  });
+  return readJson<AnomalyDetectApiResponse>(res);
+}
+
+export async function fetchAnomalyResults(baseUrl: string): Promise<AnomalyResultsApiResponse> {
+  const res = await fetch(joinUrl(baseUrl, "/api/anomaly/results"));
+  return readJson<AnomalyResultsApiResponse>(res);
 }

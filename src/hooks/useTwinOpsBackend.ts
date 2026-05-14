@@ -16,6 +16,8 @@ import {
   postRunAgents,
   postResetAnomaly,
   postTriggerAnomaly,
+  postDetectAnomaly,
+  fetchAnomalyResults
 } from "../api/client";
 import type {
   AlertsApiResponse,
@@ -26,6 +28,7 @@ import type {
   ReportsApiResponse,
   TelemetryApiResponse,
   WorkOrderApiResponse,
+  AnomalyResult,
 } from "../api/types";
 import { buildAssets } from "../data/assetBuilders";
 import type { Asset, AssetStatus } from "../types";
@@ -164,6 +167,8 @@ export function useTwinOpsBackend(pollMs = 3000) {
   const [ready, setReady] = useState(false);	
   const { latestTelemetry, streamStatus } = useTelemetryStream(baseUrl);
   const streamIsLive = streamStatus === "ok";
+  const [anomalyResults, setAnomalyResults] = useState<AnomalyResult[]>([]);
+  const [latestAnomaly, setLatestAnomaly] = useState<AnomalyResult | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -188,6 +193,16 @@ export function useTwinOpsBackend(pollMs = 3000) {
       setAlerts(alertQueue);
       setReports(reportData);
       setWorkOrders(orders);
+
+      try {
+        const anomalyHistory = await fetchAnomalyResults(baseUrl);
+        const normalizedResults = anomalyHistory.results ?? anomalyHistory.items ?? anomalyHistory.data ?? [];
+
+        setAnomalyResults(normalizedResults);
+        setLatestAnomaly(normalizedResults[0] ?? null);
+      } catch {
+      setAnomalyResults([]);
+      }
 
       setPollError(null);
       setReady(true);
@@ -230,6 +245,25 @@ export function useTwinOpsBackend(pollMs = 3000) {
       throw e;
     }
   }, [baseUrl, refresh]);
+
+  const detectAnomaly = useCallback(async () => {
+  setActionError(null);
+
+  try {
+    const response = await postDetectAnomaly(baseUrl);
+
+    if (response.result) {
+      setLatestAnomaly(response.result);
+      setAnomalyResults((previous) => [response.result, ...previous]);
+    }
+
+    await refresh();
+    return response;
+  } catch (e) {
+    setActionError(e instanceof Error ? e.message : "Anomaly detection failed");
+    throw e;
+  }
+}, [baseUrl, refresh]);
 
   const resetAnomaly = useCallback(async () => {
     setActionError(null);
@@ -331,5 +365,8 @@ export function useTwinOpsBackend(pollMs = 3000) {
     createWorkOrder,
     approveWorkOrder,
     dispatchWorkOrder,
+    anomalyResults,
+    latestAnomaly,
+    detectAnomaly,
   };
 }

@@ -9,13 +9,17 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 from services.adt_service import get_twin_dependencies
 from fastapi.responses import StreamingResponse
+from services.anomaly_service import detect_anomaly_from_telemetry
+from services.azure_ml_service import azure_ml_enabled, detect_with_azure_ml
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-
+from services.cosmos_service import save_anomaly_result, list_anomaly_results, cosmos_enabled
 from features.agents_api import register_agents_routes
+from services.azure_ml_service import azure_ml_enabled, detect_with_azure_ml
+from services.cosmos_service import cosmos_enabled, save_anomaly_result
 
 try:
     from openai import OpenAI
@@ -1105,3 +1109,50 @@ async def dispatch_work_order(work_order_id: str, payload: WorkOrderDispatchRequ
     append_work_order_history(work_order, "Work order dispatched to the mock maintenance team.")
 
     return work_order
+@app.get("/api/anomaly/results")
+async def get_anomaly_results(machineId: str | None = None, limit: int = 20):
+    results = list_anomaly_results(machine_id=machineId, limit=limit)
+    return {
+        "source": "cosmos-db" if cosmos_enabled() else "local-disabled",
+        "status": "ok",
+        "count": len(results),
+        "results": results,
+    }
+
+
+@app.post("/api/anomaly/detect")
+async def detect_anomaly():
+    try:
+        telemetry = build_telemetry_snapshot()
+
+        detection = detect_anomaly_from_telemetry(telemetry)
+
+        motor_a = telemetry.get("motor_A", {})
+
+        result = save_anomaly_result(
+            machine_id="motor-A",
+            telemetry=motor_a,
+            is_anomaly=detection.get("isAnomaly", False),
+            severity=detection.get("severity", "Low"),
+            contributing_factors=detection.get("contributingFactors", []),
+            source=detection.get("source", "azure-ml-managed-endpoint"),
+            agent_triggered=detection.get("isAnomaly", False),
+        )
+
+        return {
+            "status": "ok",
+            "cosmosEnabled": cosmos_enabled(),
+            "detection": detection,
+            "result": result,
+            "agentTrigger": {
+                "enabled": detection.get("isAnomaly", False),
+                "target": "phase-5-agent-orchestrator",
+                "reason": "anomaly detected" if detection.get("isAnomaly", False) else "normal telemetry",
+            },
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Anomaly detection failed: {type(e).__name__}: {str(e)}",
+        )

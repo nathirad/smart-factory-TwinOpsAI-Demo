@@ -304,3 +304,52 @@ export interface TwinDependenciesApiResponse {
   dependencies: TwinDependencyNode[];
   graph: TwinDependencyEdge[];
 }
+
+export interface AnomalyResult {
+  id?: string;
+  machineId?: string;
+  timestamp?: string;
+  createdAt?: string;
+  isAnomaly: boolean;
+  severity: "Normal" | "Low" | "Medium" | "High" | "Critical" | string;
+  contributingFactors: Array<
+    | string
+    | {
+        metric?: string;
+        name?: string;
+        value?: number;
+        reason?: string;
+        score?: number;
+      }
+  >;
+  telemetry?: Record<string, unknown>;
+  source?: string;
+  agentTriggered?: boolean;
+  stored?: boolean;
+  savedToCosmos?: boolean;
+  agentTrigger?: {
+    enabled?: boolean;
+    target?: string;
+    reason?: string;
+  };
+}
+
+export interface AnomalyDetectApiResponse {
+  status: string;
+  cosmosEnabled: boolean;
+  result: AnomalyResult;
+  agentTrigger?: {
+    enabled: boolean;
+    target: string;
+    reason: string;
+  };
+}
+
+export interface AnomalyResultsApiResponse {
+  status: string;
+  cosmosEnabled?: boolean;
+  count?: number;
+  results?: AnomalyResult[];
+  items?: AnomalyResult[];
+  data?: AnomalyResult[];
+}
