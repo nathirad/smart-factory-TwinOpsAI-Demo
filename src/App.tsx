@@ -79,6 +79,22 @@ import type {
   RoadmapPhase,
 } from "./types";
 
+type AnomalyResult = {
+  id?: string;
+  machineId?: string;
+  isAnomaly: boolean;
+  severity: string;
+  contributingFactors?: Array<
+    string | {
+      metric?: string;
+      name?: string;
+      value?: number;
+      reason?: string;
+      score?: number;
+    }
+  >;
+};
+
 type PageId = "dashboard" | "digital-twin" | "agents" | "recommendations" | "work-orders" | "reports";
 
 const navItems: { id: PageId; label: string; icon: LucideIcon }[] = [
@@ -316,6 +332,9 @@ export default function App() {
     createWorkOrder,
     approveWorkOrder,
     dispatchWorkOrder,
+    detectAnomaly,
+    anomalyResults,
+    latestAnomaly,
   } = useTwinOpsBackend(3000);
 
   const [activePage, setActivePage] = useState<PageId>("dashboard");
@@ -344,6 +363,7 @@ export default function App() {
   async function simulateAnomaly() {
     try {
       await triggerAnomaly();
+      await detectAnomaly();
       setActivePage("agents");
     } catch {
       /* useTwinOpsBackend sets actionError */
@@ -461,11 +481,19 @@ export default function App() {
                 dashboard={dashboard}
                 previewLineLabel={previewLineLabel}
                 previewLineDanger={previewLineDanger}
+                latestAnomaly={latestAnomaly}
+                anomalyResults={anomalyResults}
                 onNavigate={navigateToPage}
               />
             ) : null}
             {activePage === "digital-twin" ? (
-              <DigitalTwinPage baseUrl={baseUrl}assets={assets} alert={activeAlert} anomalyActive={anomalyActive} twin={digitalTwin} />
+              <DigitalTwinPage
+                baseUrl={baseUrl}
+                assets={assets}
+                alert={activeAlert}
+                anomalyActive={anomalyActive}
+                twin={digitalTwin}
+                />
             ) : null}
             {activePage === "agents" ? <AgentsPage agents={agents} executionLog={executionLog} anomalyActive={anomalyActive} agentsApiMode={agentsApi?.mode ?? "local-fallback"} onRunCascade={runAgentCascade} /> : null}
             {activePage === "recommendations" ? (
@@ -689,6 +717,8 @@ function DashboardPage({
   dashboard,
   previewLineLabel,
   previewLineDanger,
+  latestAnomaly,
+  anomalyResults,
   onNavigate,
 }: {
   assets: Asset[];
@@ -699,6 +729,8 @@ function DashboardPage({
   dashboard: DashboardApiResponse | null;
   previewLineLabel: string;
   previewLineDanger: boolean;
+  latestAnomaly: AnomalyResult | null;
+  anomalyResults: AnomalyResult[];
   onNavigate: (page: PageId) => void;
 }) {
   const kpiMap = new Map(dashboard?.kpis?.map((kpi) => [kpi.id, kpi]));
@@ -719,6 +751,45 @@ function DashboardPage({
             <KpiCard title="OEE" value={oeeValue} suffix="%" detail={kpiMap.get("oee")?.trend ?? "Backend summary"} tone="purple" icon={BarChart3} />
             <KpiCard title="Active Alerts" value={`${activeAlerts}`} detail={kpiMap.get("alerts")?.status ?? (activeAlerts ? "Motor A requires review" : "All systems normal")} tone="orange" icon={Bell} />
           </section>
+
+        {latestAnomaly && (
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-slate-500">
+                Azure ML Anomaly Detection
+                </p>
+                <h3 className="text-lg font-semibold text-slate-900">
+                  {latestAnomaly.isAnomaly ? "Anomaly Detected" : "Normal Operation"}
+                </h3>
+              </div>
+
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-700">
+                  {latestAnomaly.severity}
+              </span>
+              </div>
+
+    <div className="mt-3 space-y-1 text-sm text-slate-600">
+      <p>Machine: {latestAnomaly.machineId ?? "motor-A"}</p>
+      <p>Cosmos records: {anomalyResults.length}</p>
+
+      {(latestAnomaly.contributingFactors ?? []).length > 0 ? (
+        <p>
+        Factors:{" "}
+      {(latestAnomaly.contributingFactors ?? [])
+        .map((factor) =>
+        typeof factor === "string"
+          ? factor
+          : factor.metric ?? factor.name ?? "unknown"
+      )
+      .join(", ")}
+  </p>
+) : (
+  <p>Factors: none</p>
+)}
+    </div>
+  </section>
+)}
 
           <section className="grid self-start gap-4 xl:grid-cols-3">
             {assets.map((asset) => (

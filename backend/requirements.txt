@@ -8,3 +8,4 @@ requests>=2.32.0,<3.0.0
 azure-eventhub
 azure-identity
 azure-digitaltwins-core
+azure-cosmos

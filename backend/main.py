@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-
+from services.cosmos_service import save_anomaly_result, list_anomaly_results, cosmos_enabled
 from features.agents_api import register_agents_routes
 
 try:
@@ -1105,3 +1105,61 @@ async def dispatch_work_order(work_order_id: str, payload: WorkOrderDispatchRequ
     append_work_order_history(work_order, "Work order dispatched to the mock maintenance team.")
 
     return work_order
+@app.get("/api/anomaly/results")
+async def get_anomaly_results(machineId: str | None = None, limit: int = 20):
+    results = list_anomaly_results(machine_id=machineId, limit=limit)
+    return {
+        "source": "cosmos-db" if cosmos_enabled() else "local-disabled",
+        "status": "ok",
+        "count": len(results),
+        "results": results,
+    }
+
+
+@app.post("/api/anomaly/detect")
+async def detect_anomaly():
+    telemetry = build_telemetry_snapshot()
+
+    motor_a = telemetry.get("motor_A", {})
+    vibration = float(motor_a.get("vibration", 0))
+    temperature = float(motor_a.get("temperature", 0))
+    load = float(motor_a.get("load", 0))
+
+    contributing_factors = []
+
+    if vibration >= 3.0:
+        contributing_factors.append("vibration")
+    if temperature >= 78:
+        contributing_factors.append("temperature")
+    if load >= 85:
+        contributing_factors.append("energyLoad")
+
+    is_anomaly = len(contributing_factors) > 0
+
+    if vibration >= 3.5 or temperature >= 82 or load >= 90:
+        severity = "High"
+    elif is_anomaly:
+        severity = "Medium"
+    else:
+        severity = "Low"
+
+    result = save_anomaly_result(
+        machine_id="motor-A",
+        telemetry=motor_a,
+        is_anomaly=is_anomaly,
+        severity=severity,
+        contributing_factors=contributing_factors,
+        source="phase-4-mvp-anomaly-detector",
+        agent_triggered=is_anomaly,
+    )
+
+    return {
+        "status": "ok",
+        "cosmosEnabled": cosmos_enabled(),
+        "result": result,
+        "agentTrigger": {
+            "enabled": is_anomaly,
+            "target": "phase-5-agent-orchestrator",
+            "reason": "anomaly detected" if is_anomaly else "normal telemetry",
+        },
+    }
