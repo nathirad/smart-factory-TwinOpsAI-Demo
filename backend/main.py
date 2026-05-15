@@ -9,13 +9,26 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 from services.adt_service import get_twin_dependencies
 from fastapi.responses import StreamingResponse
+from services.anomaly_service import detect_anomaly_from_telemetry
+from services.azure_ml_service import azure_ml_enabled, detect_with_azure_ml
+from services.fabric_kql import (
+    get_latest_telemetry as get_fabric_latest_telemetry,
+    get_latest_anomalies as get_fabric_latest_anomalies,
+)
+from services.iot_hub_service import (
+    start_iot_hub_listener,
+    stop_iot_hub_listener,
+    get_latest_telemetry as get_iot_latest_telemetry,
+)
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-
+from services.cosmos_service import save_anomaly_result, list_anomaly_results, cosmos_enabled
 from features.agents_api import register_agents_routes
+from services.azure_ml_service import azure_ml_enabled, detect_with_azure_ml
+from services.cosmos_service import cosmos_enabled, save_anomaly_result
 
 try:
     from openai import OpenAI
@@ -935,14 +948,6 @@ async def get_ai_recommendations():
         print(f"OpenAI generation failed: {exc}. Returning fallback response.")
         return fallback_response
 
-# Azure IoT Hub live telemetry integration
-from services.iot_hub_service import (
-    start_iot_hub_listener,
-    stop_iot_hub_listener,
-    get_latest_telemetry,
-)
-
-
 @app.on_event("startup")
 async def startup_iot_hub_listener():
     await start_iot_hub_listener()
@@ -955,7 +960,7 @@ async def shutdown_iot_hub_listener():
 
 @app.get("/api/telemetry/live")
 async def get_live_telemetry():
-    telemetry = get_latest_telemetry()
+    telemetry = telemetry = get_iot_latest_telemetry()
 
     if telemetry is None:
         return {
@@ -975,7 +980,7 @@ async def get_live_telemetry():
 async def stream_live_telemetry():
     async def event_generator():
         while True:
-            telemetry = get_latest_telemetry()
+            telemetry = get_iot_latest_telemetry()
 
             if telemetry is None:
                 payload = {
@@ -1105,3 +1110,214 @@ async def dispatch_work_order(work_order_id: str, payload: WorkOrderDispatchRequ
     append_work_order_history(work_order, "Work order dispatched to the mock maintenance team.")
 
     return work_order
+@app.get("/api/anomaly/results")
+async def get_anomaly_results(machineId: str | None = None, limit: int = 20):
+    results = list_anomaly_results(machine_id=machineId, limit=limit)
+    return {
+        "source": "cosmos-db" if cosmos_enabled() else "local-disabled",
+        "status": "ok",
+        "count": len(results),
+        "results": results,
+    }
+
+
+@app.post("/api/anomaly/detect")
+async def detect_anomaly():
+    try:
+        telemetry = build_telemetry_snapshot()
+
+        detection = detect_anomaly_from_telemetry(telemetry)
+
+        motor_a = telemetry.get("motor_A", {})
+
+        result = save_anomaly_result(
+            machine_id="motor-A",
+            telemetry=motor_a,
+            is_anomaly=detection.get("isAnomaly", False),
+            severity=detection.get("severity", "Low"),
+            contributing_factors=detection.get("contributingFactors", []),
+            source=detection.get("source", "azure-ml-managed-endpoint"),
+            agent_triggered=detection.get("isAnomaly", False),
+        )
+
+        return {
+            "status": "ok",
+            "cosmosEnabled": cosmos_enabled(),
+            "detection": detection,
+            "result": result,
+            "agentTrigger": {
+                "enabled": detection.get("isAnomaly", False),
+                "target": "phase-5-agent-orchestrator",
+                "reason": "anomaly detected" if detection.get("isAnomaly", False) else "normal telemetry",
+            },
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Anomaly detection failed: {type(e).__name__}: {str(e)}",
+        )
+
+@app.get("/api/fabric/telemetry/latest")
+async def fabric_telemetry_latest(
+    limit: int = Query(default=20, ge=1, le=100),
+    minutes: int = Query(default=30, ge=1, le=1440),
+):
+    try:
+        data = get_fabric_latest_telemetry(limit=limit, minutes=minutes)
+
+        return {
+            "status": "ok",
+            "source": "microsoft-fabric-kql",
+            "database": "twinopsai_kql_db",
+            "table": "telemetry_v2",
+            "count": len(data),
+            "data": data,
+        }
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status": "error",
+                "source": "microsoft-fabric-kql",
+                "message": str(error),
+            },
+        )
+
+
+@app.get("/api/fabric/anomalies/latest")
+async def fabric_anomalies_latest(
+    limit: int = Query(default=20, ge=1, le=100),
+    minutes: int = Query(default=30, ge=1, le=1440),
+):
+    try:
+        anomalies = get_fabric_latest_anomalies(limit=limit, minutes=minutes)
+
+        return {
+            "status": "ok",
+            "source": "microsoft-fabric-kql",
+            "table": "telemetry_v2",
+            "count": len(anomalies),
+            "anomalyCount": len(anomalies),
+            "anomalies": anomalies,
+        }
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status": "error",
+                "source": "microsoft-fabric-kql",
+                "message": str(error),
+            },
+        )
+
+
+@app.get("/api/fabric/anomaly/latest")
+async def get_fabric_anomaly_latest(
+    limit: int = Query(default=20, ge=1, le=100),
+    minutes: int = Query(default=120, ge=1, le=1440),
+):
+    try:
+        rows = get_fabric_latest_telemetry(limit=limit, minutes=minutes)
+        alerts = []
+
+        for row in rows:
+            temperature = float(row.get("temperature") or 0)
+            vibration = float(row.get("vibration") or 0)
+            energy_load = float(row.get("energyLoad") or 0)
+            status = str(row.get("status") or "").upper()
+
+            reasons = []
+
+            if temperature > 76:
+                reasons.append(f"temperature high: {temperature}")
+
+            if vibration > 3.5:
+                reasons.append(f"vibration high: {vibration}")
+
+            if energy_load > 20:
+                reasons.append(f"energyLoad high: {energy_load}")
+
+            if status == "WARN":
+                reasons.append("device status is WARN")
+
+            if reasons:
+                severity = "CRITICAL" if (
+                    temperature > 76
+                    or vibration > 3.5
+                    or energy_load > 20
+                    or status == "WARN"
+                ) else "WARNING"
+
+                alerts.append({
+                    "timestamp": row.get("timestamp"),
+                    "machineId": row.get("machineId"),
+                    "deviceId": row.get("deviceId"),
+                    "severity": severity,
+                    "status": status,
+                    "temperature": temperature,
+                    "vibration": vibration,
+                    "energyLoad": energy_load,
+                    "reasons": reasons,
+                    "recommendedAction": "Inspect motor-A and create maintenance work order",
+                })
+
+        return {
+            "status": "ok",
+            "source": "microsoft-fabric-kql",
+            "table": "telemetry_v2",
+            "count": len(alerts),
+            "alerts": alerts,
+        }
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status": "error",
+                "source": "microsoft-fabric-kql",
+                "message": str(error),
+            },
+        )
+
+@app.get("/api/fabric/dashboard")
+async def fabric_dashboard(
+    limit: int = Query(default=20, ge=1, le=100),
+    minutes: int = Query(default=120, ge=1, le=1440),
+):
+    try:
+        telemetry = get_fabric_latest_telemetry(limit=limit, minutes=minutes)
+        anomalies = get_fabric_latest_anomalies(limit=limit, minutes=minutes)
+
+        latest = telemetry[0] if telemetry else None
+        critical_count = sum(
+            1 for row in anomalies
+            if row.get("severity") == "CRITICAL" or row.get("isAnomaly") is True
+        )
+
+        return {
+            "status": "ok",
+            "source": "microsoft-fabric-kql",
+            "table": "telemetry_v2",
+            "latestTelemetry": latest,
+            "telemetry": telemetry,
+            "alerts": anomalies,
+            "summary": {
+                "telemetryCount": len(telemetry),
+                "alertCount": len(anomalies),
+                "criticalCount": critical_count,
+                "assetHealth": "Critical" if critical_count > 0 else "Normal",
+            },
+        }
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status": "error",
+                "source": "microsoft-fabric-kql",
+                "message": str(error),
+            },
+        )
