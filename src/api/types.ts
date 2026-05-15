@@ -304,3 +304,27 @@ export interface TwinDependenciesApiResponse {
   dependencies: TwinDependencyNode[];
   graph: TwinDependencyEdge[];
 }
+
+export interface AnomalyDetectApiResponse {
+  timestamp?: string;
+  machineId?: string;
+  deviceId?: string;
+  severity: "NORMAL" | "WARNING" | "CRITICAL" | string;
+  status?: string;
+  temperature?: number;
+  vibration?: number;
+  energyLoad?: number;
+  reasons: string[];
+  recommendedAction?: string;
+}
+
+export interface AnomalyResultsApiResponse {
+  status: string;
+  source: string;
+  table: string;
+  count: number;
+  anomalyCount?: number;
+  data?: unknown[];
+  anomalies?: AnomalyDetectApiResponse[];
+  alerts?: AnomalyDetectApiResponse[];
+}
