@@ -2,6 +2,8 @@ import { Client, Message } from "azure-iot-device";
 import { Mqtt } from "azure-iot-device-mqtt";
 
 const connStr = process.env.IOTHUB_DEVICE_CONNECTION_STRING;
+const deviceId = process.env.DEVICE_ID ?? "simDevice01";
+const machineId = process.env.MACHINE_ID ?? "motor-A";
 
 if (!connStr) {
   console.error("Missing IOTHUB_DEVICE_CONNECTION_STRING");
@@ -12,12 +14,13 @@ const client = Client.fromConnectionString(connStr, Mqtt);
 
 function createTelemetry() {
   return {
-    deviceId: "simDevice01",
+    deviceId,
+    machineId,
     timestamp: new Date().toISOString(),
     vibration: Number((2 + Math.random() * 2).toFixed(2)),
     temperature: Number((70 + Math.random() * 8).toFixed(2)),
     energyLoad: Number((15 + Math.random() * 6).toFixed(2)),
-    status: Math.random() > 0.85 ? "WARN" : "NORMAL"
+    status: Math.random() > 0.85 ? "WARN" : "NORMAL",
   };
 }
 
