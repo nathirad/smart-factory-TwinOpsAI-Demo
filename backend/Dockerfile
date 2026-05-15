@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 # Agents API feature: copy isolated feature modules required by main.py route registration.
 COPY features ./features
+COPY services ./services
 COPY mock-data ./mock-data
 
 EXPOSE 8000

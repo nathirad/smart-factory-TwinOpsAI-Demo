@@ -3,19 +3,20 @@ import json
 import os
 import random
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Literal
 from urllib.error import URLError
-from urllib.request import Request, urlopen
-from services.adt_service import get_twin_dependencies
+from urllib.request import Request as UrlRequest, urlopen
+from services.adt_service import get_mock_twin_dependencies, get_twin_dependencies
 from fastapi.responses import StreamingResponse
 from services.anomaly_service import detect_anomaly_from_telemetry
-from services.azure_ml_service import azure_ml_enabled, detect_with_azure_ml
 from services.fabric_kql import (
     get_latest_telemetry as get_fabric_latest_telemetry,
     get_latest_anomalies as get_fabric_latest_anomalies,
 )
 from services.iot_hub_service import (
+    set_telemetry_handler,
     start_iot_hub_listener,
     stop_iot_hub_listener,
     get_latest_telemetry as get_iot_latest_telemetry,
@@ -27,12 +28,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from services.cosmos_service import save_anomaly_result, list_anomaly_results, cosmos_enabled
 from features.agents_api import register_agents_routes
-from services.azure_ml_service import azure_ml_enabled, detect_with_azure_ml
-from services.cosmos_service import cosmos_enabled, save_anomaly_result
 
 try:
-    from openai import OpenAI
+    from openai import AzureOpenAI, OpenAI
 except ImportError:
+    AzureOpenAI = None
     OpenAI = None
 
 try:
@@ -51,12 +51,30 @@ WORK_ORDER_SYSTEM_NAME = os.getenv(
     "In-memory Work Order Queue" if APP_MODE == "mock" else "External CMMS",
 )
 CMMS_DISPATCH_WEBHOOK_URL = os.getenv("CMMS_DISPATCH_WEBHOOK_URL")
+CMMS_DISPATCH_BEARER_TOKEN = os.getenv("CMMS_DISPATCH_BEARER_TOKEN")
 DASHBOARD_DATA_ENDPOINT = os.getenv("DASHBOARD_DATA_ENDPOINT")
 ALERTS_DATA_ENDPOINT = os.getenv("ALERTS_DATA_ENDPOINT")
 REPORTS_DATA_ENDPOINT = os.getenv("REPORTS_DATA_ENDPOINT")
+EXTERNAL_API_BEARER_TOKEN = os.getenv("EXTERNAL_API_BEARER_TOKEN")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
+AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")
 print(f"Starting SmartFactory TwinOps API in {APP_MODE.upper()} mode")
 
-app = FastAPI(title="SmartFactory TwinOps API")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    set_telemetry_handler(handle_live_telemetry)
+    await start_iot_hub_listener()
+    try:
+        yield
+    finally:
+        await stop_iot_hub_listener()
+
+
+app = FastAPI(title="SmartFactory TwinOps API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,7 +86,17 @@ app.add_middleware(
 
 
 openai_key = os.getenv("OPENAI_API_KEY")
-openai_client = OpenAI(api_key=openai_key) if openai_key and OpenAI else None
+openai_client = None
+openai_model = OPENAI_MODEL
+if AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY and AZURE_OPENAI_DEPLOYMENT and AzureOpenAI:
+    openai_client = AzureOpenAI(
+        azure_endpoint=AZURE_OPENAI_ENDPOINT,
+        api_key=AZURE_OPENAI_API_KEY,
+        api_version=AZURE_OPENAI_API_VERSION,
+    )
+    openai_model = AZURE_OPENAI_DEPLOYMENT
+elif openai_key and OpenAI:
+    openai_client = OpenAI(api_key=openai_key)
 
 search_endpoint = os.getenv("AZURE_SEARCH_ENDPOINT")
 search_key = os.getenv("AZURE_SEARCH_KEY")
@@ -225,7 +253,11 @@ def fetch_external_json(endpoint: str | None):
     if not endpoint:
         return None
 
-    request = Request(endpoint, headers={"Accept": "application/json"}, method="GET")
+    headers = {"Accept": "application/json"}
+    if EXTERNAL_API_BEARER_TOKEN:
+        headers["Authorization"] = f"Bearer {EXTERNAL_API_BEARER_TOKEN}"
+
+    request = UrlRequest(endpoint, headers=headers, method="GET")
 
     try:
         with urlopen(request, timeout=10) as response:
@@ -234,6 +266,119 @@ def fetch_external_json(endpoint: str | None):
     except (URLError, TimeoutError, json.JSONDecodeError) as exc:
         print(f"External data fetch failed for {endpoint}: {exc}")
         return None
+
+
+def update_anomaly_state_from_metrics(metrics: dict, timestamp: str | None = None):
+    app_state["latest_ingested_data"] = metrics
+
+    if metrics.get("status") == "Critical":
+        app_state["is_anomaly_active"] = True
+        app_state["anomaly_start_time"] = timestamp or now_string()
+        app_state["agent_cascade_started"] = True
+        app_state["agent_cascade_last_run"] = now_string()
+
+
+def normalize_live_telemetry(raw: dict):
+    payload = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+    if not isinstance(payload, dict):
+        return None
+
+    try:
+        vibration = float(payload.get("vibration", payload.get("vibration_mm_s")))
+        temperature = float(payload.get("temperature", payload.get("temperature_c")))
+        load = float(payload.get("load", payload.get("energyLoad", payload.get("load_percent"))))
+    except (TypeError, ValueError):
+        return None
+
+    status = str(payload.get("status") or ("Critical" if vibration >= 3.0 or temperature >= 75 else "Normal"))
+    if status.lower() in {"critical", "fault", "error"}:
+        status = "Critical"
+    elif status.lower().startswith("warn"):
+        status = "Warning"
+    else:
+        status = "Normal"
+
+    timestamp = raw.get("timestamp") or payload.get("timestamp") or raw.get("enqueuedTime")
+    return {
+        "vibration": round(vibration, 2),
+        "temperature": round(temperature, 1),
+        "load": round(load, 1),
+        "status": status,
+    }, timestamp
+
+
+def handle_live_telemetry(raw: dict):
+    normalized = normalize_live_telemetry(raw)
+    if normalized is None:
+        print(f"Live telemetry skipped because payload does not match TwinOps metrics: {raw}")
+        return
+
+    metrics, timestamp = normalized
+    update_anomaly_state_from_metrics(metrics, timestamp)
+
+
+def configured(value: str | None) -> bool:
+    return bool(value and value.strip())
+
+
+def build_integrations_status():
+    return {
+        "mode": APP_MODE,
+        "generated_at": now_string(),
+        "integrations": {
+            "iot_hub": {
+                "enabled": os.getenv("USE_AZURE", "false").lower() == "true",
+                "configured": configured(os.getenv("IOTHUB_EVENTHUB_CONNECTION_STRING")),
+                "consumer_group": os.getenv("IOTHUB_CONSUMER_GROUP", "twinops-cg"),
+            },
+            "azure_digital_twins": {
+                "configured": configured(os.getenv("ADT_URL") or os.getenv("ADT_ENDPOINT")),
+                "fallback": "mock-digital-twins",
+            },
+            "azure_ml": {
+                "configured": configured(os.getenv("AZURE_ML_SCORING_URI") or os.getenv("AZURE_ML_ANOMALY_ENDPOINT")),
+                "deployment": os.getenv("AZURE_ML_DEPLOYMENT_NAME"),
+                "fallback": "local-rule-detector",
+            },
+            "cosmos_db": {
+                "configured": configured(os.getenv("COSMOS_ENDPOINT")) and configured(os.getenv("COSMOS_KEY")),
+                "database": os.getenv("COSMOS_DB", "twinopsai-anomaly-db"),
+                "container": os.getenv("COSMOS_CONTAINER", "anomaly-results"),
+            },
+            "fabric_kql": {
+                "configured": configured(os.getenv("FABRIC_KQL_CLUSTER_URI")),
+                "database": os.getenv("FABRIC_KQL_DATABASE", "twinopsai_kql_db"),
+                "table": os.getenv("FABRIC_KQL_TABLE", "telemetry_v2"),
+            },
+            "azure_ai_search": {
+                "configured": all([configured(search_endpoint), configured(search_key), configured(search_index)]),
+                "index": search_index,
+                "fallback": "local-sop-files",
+            },
+            "openai": {
+                "configured": configured(openai_key) or all([
+                    configured(AZURE_OPENAI_ENDPOINT),
+                    configured(AZURE_OPENAI_API_KEY),
+                    configured(AZURE_OPENAI_DEPLOYMENT),
+                ]),
+                "azure_openai_configured": all([
+                    configured(AZURE_OPENAI_ENDPOINT),
+                    configured(AZURE_OPENAI_API_KEY),
+                    configured(AZURE_OPENAI_DEPLOYMENT),
+                ]),
+                "model_or_deployment": openai_model,
+                "fallback": "system-recommendation",
+            },
+            "dashboard_external_api": {"configured": configured(DASHBOARD_DATA_ENDPOINT)},
+            "alerts_external_api": {"configured": configured(ALERTS_DATA_ENDPOINT)},
+            "reports_external_api": {"configured": configured(REPORTS_DATA_ENDPOINT)},
+            "cmms_dispatch": {
+                "configured": configured(CMMS_DISPATCH_WEBHOOK_URL),
+                "system_name": WORK_ORDER_SYSTEM_NAME,
+                "auth_configured": configured(CMMS_DISPATCH_BEARER_TOKEN),
+            },
+        },
+    }
 
 
 def build_telemetry_snapshot():
@@ -642,10 +787,14 @@ def dispatch_to_external_system(work_order: dict):
         return work_order
 
     payload = json.dumps(work_order).encode("utf-8")
-    request = Request(
+    headers = {"Content-Type": "application/json"}
+    if CMMS_DISPATCH_BEARER_TOKEN:
+        headers["Authorization"] = f"Bearer {CMMS_DISPATCH_BEARER_TOKEN}"
+
+    request = UrlRequest(
         CMMS_DISPATCH_WEBHOOK_URL,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
 
@@ -673,14 +822,7 @@ def dispatch_to_external_system(work_order: dict):
 
 @app.post("/api/ingest-telemetry")
 async def ingest_telemetry(payload: IngestPayload):
-    app_state["latest_ingested_data"] = payload.data.model_dump()
-
-    if payload.data.status == "Critical":
-        app_state["is_anomaly_active"] = True
-        app_state["anomaly_start_time"] = payload.timestamp
-        # Agents API feature: critical telemetry starts the simulated agent cascade alongside the anomaly scenario.
-        app_state["agent_cascade_started"] = True
-        app_state["agent_cascade_last_run"] = now_string()
+    update_anomaly_state_from_metrics(payload.data.model_dump(), payload.timestamp)
 
     return {
         "status": "received",
@@ -713,6 +855,10 @@ async def receive_adt_events(request: Request):
     for event in events:
         print("Received ADT Event Grid event:")
         print(event)
+        event_data = event.get("data", {})
+        telemetry_candidate = event_data.get("patch") or event_data
+        if isinstance(telemetry_candidate, dict):
+            handle_live_telemetry(telemetry_candidate)
 
     return {
         "status": "ok",
@@ -767,12 +913,17 @@ async def reset_anomaly():
 # Agents API feature: registers isolated routes for the simulated Microsoft Azure multi-agent cascade.
 register_agents_routes(app, app_state)
 
+@app.get("/api/integrations/status")
+async def get_integrations_status():
+    return build_integrations_status()
+
 @app.get("/api/twins/{twin_id}/dependencies")
 async def get_twin_dependencies_api(twin_id: str):
     try:
         return get_twin_dependencies(twin_id)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        print(f"Azure Digital Twins dependency lookup failed: {exc}. Returning mock dependency graph.")
+        return get_mock_twin_dependencies(twin_id)
 
 @app.get("/api/digital-twin")
 async def get_digital_twin():
@@ -934,7 +1085,7 @@ async def get_ai_recommendations():
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=openai_model,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -948,19 +1099,9 @@ async def get_ai_recommendations():
         print(f"OpenAI generation failed: {exc}. Returning fallback response.")
         return fallback_response
 
-@app.on_event("startup")
-async def startup_iot_hub_listener():
-    await start_iot_hub_listener()
-
-
-@app.on_event("shutdown")
-async def shutdown_iot_hub_listener():
-    await stop_iot_hub_listener()
-
-
 @app.get("/api/telemetry/live")
 async def get_live_telemetry():
-    telemetry = telemetry = get_iot_latest_telemetry()
+    telemetry = get_iot_latest_telemetry()
 
     if telemetry is None:
         return {
@@ -1139,6 +1280,14 @@ async def detect_anomaly():
             source=detection.get("source", "azure-ml-managed-endpoint"),
             agent_triggered=detection.get("isAnomaly", False),
         )
+
+        if detection.get("isAnomaly", False):
+            update_anomaly_state_from_metrics({
+                "vibration": float(motor_a.get("vibration", 3.6)),
+                "temperature": float(motor_a.get("temperature", 80.0)),
+                "load": float(motor_a.get("load", motor_a.get("energyLoad", 90.0))),
+                "status": "Critical",
+            }, telemetry.get("timestamp"))
 
         return {
             "status": "ok",

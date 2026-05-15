@@ -2,8 +2,13 @@ import os
 from datetime import date, datetime
 from typing import Any
 
-from azure.identity import DefaultAzureCredential
-from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
+try:
+    from azure.identity import DefaultAzureCredential
+    from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
+except ImportError:
+    DefaultAzureCredential = None
+    KustoClient = None
+    KustoConnectionStringBuilder = None
 
 
 FABRIC_KQL_CLUSTER_URI = os.getenv("FABRIC_KQL_CLUSTER_URI", "").strip().rstrip("/")
@@ -27,6 +32,9 @@ def _validate_table_name(table_name: str) -> str:
 def _get_kusto_client() -> KustoClient:
     if not FABRIC_KQL_CLUSTER_URI:
         raise RuntimeError("Missing FABRIC_KQL_CLUSTER_URI")
+
+    if DefaultAzureCredential is None or KustoClient is None or KustoConnectionStringBuilder is None:
+        raise RuntimeError("Azure Kusto SDK is not installed")
 
     credential = DefaultAzureCredential(exclude_interactive_browser_credential=False)
 
