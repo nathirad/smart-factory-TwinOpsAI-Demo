@@ -47,3 +47,10 @@ backend/.venv/
 
 # backup files
 *.bak
+
+# Local Azure/Fabric auth cache
+backend/.azcli-fabric/
+
+# Environment secrets
+.env
+*.env
