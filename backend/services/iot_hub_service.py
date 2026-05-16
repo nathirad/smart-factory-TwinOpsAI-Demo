@@ -2,13 +2,26 @@ import asyncio
 import json
 import os
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
-from azure.eventhub.aio import EventHubConsumerClient
+try:
+    from azure.eventhub.aio import EventHubConsumerClient
+except ImportError:
+    EventHubConsumerClient = None
 
 _latest_telemetry: Optional[Dict[str, Any]] = None
-_client: Optional[EventHubConsumerClient] = None
+_client: Optional[Any] = None
 _task: Optional[asyncio.Task] = None
+_telemetry_handler: Optional[Callable[[Dict[str, Any]], None]] = None
+
+
+def set_telemetry_handler(handler: Callable[[Dict[str, Any]], None]) -> None:
+    global _telemetry_handler
+    _telemetry_handler = handler
+
+
+def is_eventhub_sdk_available() -> bool:
+    return EventHubConsumerClient is not None
 
 
 def _parse_telemetry(raw: str) -> Dict[str, Any]:
@@ -36,6 +49,8 @@ async def _on_event(partition_context, event):
         telemetry = _parse_telemetry(raw)
 
         _latest_telemetry = telemetry
+        if _telemetry_handler:
+            _telemetry_handler(telemetry)
         print("Received telemetry from IoT Hub:", telemetry)
 
         await partition_context.update_checkpoint(event)
@@ -50,6 +65,10 @@ async def start_iot_hub_listener():
     use_azure = os.getenv("USE_AZURE", "false").lower() == "true"
     if not use_azure:
         print("USE_AZURE=false, IoT Hub listener disabled")
+        return
+
+    if EventHubConsumerClient is None:
+        print("azure-eventhub is not installed, IoT Hub listener disabled")
         return
 
     conn_str = os.getenv("IOTHUB_EVENTHUB_CONNECTION_STRING")

@@ -1,8 +1,12 @@
 import os
 from typing import Any
 
-from azure.identity import DefaultAzureCredential
-from azure.digitaltwins.core import DigitalTwinsClient
+try:
+    from azure.identity import DefaultAzureCredential
+    from azure.digitaltwins.core import DigitalTwinsClient
+except ImportError:
+    DefaultAzureCredential = None
+    DigitalTwinsClient = None
 
 
 TWIN_ID_MAP = {
@@ -13,19 +17,60 @@ TWIN_ID_MAP = {
     "line": "line-001",
 }
 
+MOCK_TWINS = {
+    "motor-A": {
+        "id": "motor-A",
+        "model": "dtmi:smartfactory:Machine;1",
+        "name": "Motor A",
+        "machineType": "Motor",
+        "location": "Packaging Line 1",
+        "status": "Critical",
+        "healthScore": 62,
+        "vibration": 3.4,
+        "temperature": 78.2,
+        "energyLoad": 91.0,
+    },
+    "motor-B": {
+        "id": "motor-B",
+        "model": "dtmi:smartfactory:Machine;1",
+        "name": "Motor B",
+        "machineType": "Motor",
+        "location": "Packaging Line 1",
+        "status": "Normal",
+        "healthScore": 95,
+        "vibration": 1.2,
+        "temperature": 61.0,
+        "energyLoad": 68.0,
+    },
+    "conveyor-C": {
+        "id": "conveyor-C",
+        "model": "dtmi:smartfactory:Machine;1",
+        "name": "Conveyor C",
+        "machineType": "Conveyor",
+        "location": "Packaging Line 1",
+        "status": "At Risk",
+        "healthScore": 84,
+        "vibration": 1.0,
+        "temperature": 55.0,
+        "energyLoad": 63.0,
+    },
+}
 
-_client: DigitalTwinsClient | None = None
+_client: Any | None = None
 
 
 def normalize_twin_id(twin_id: str) -> str:
     return TWIN_ID_MAP.get(twin_id, twin_id)
 
 
-def get_client() -> DigitalTwinsClient:
+def get_client() -> Any:
     global _client
 
     if _client is not None:
         return _client
+
+    if DefaultAzureCredential is None or DigitalTwinsClient is None:
+        raise RuntimeError("Azure Digital Twins SDK is not installed")
 
     adt_url = os.getenv("ADT_URL") or os.getenv("ADT_ENDPOINT")
 
@@ -107,4 +152,33 @@ def get_twin_dependencies(twin_id: str) -> dict[str, Any]:
         "root": clean_twin(root_twin),
         "dependencies": dependencies,
         "graph": graph_edges,
+    }
+
+
+def get_mock_twin_dependencies(twin_id: str) -> dict[str, Any]:
+    root_id = normalize_twin_id(twin_id)
+    dependencies = [MOCK_TWINS["motor-B"], MOCK_TWINS["conveyor-C"]] if root_id == "motor-A" else []
+    graph = [
+        {
+            "sourceId": root_id,
+            "relationshipId": f"{root_id}-feeds-motor-B",
+            "relationshipName": "feedsTo",
+            "targetId": "motor-B",
+            "depth": 1,
+        },
+        {
+            "sourceId": root_id,
+            "relationshipId": f"{root_id}-feeds-conveyor-C",
+            "relationshipName": "feedsTo",
+            "targetId": "conveyor-C",
+            "depth": 1,
+        },
+    ] if root_id == "motor-A" else []
+
+    return {
+        "source": "mock-digital-twins",
+        "twinId": root_id,
+        "root": MOCK_TWINS.get(root_id, {"id": root_id, "name": root_id, "status": "Unknown"}),
+        "dependencies": dependencies,
+        "graph": graph,
     }
