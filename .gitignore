@@ -54,3 +54,8 @@ backend/.azcli-fabric/
 # Environment secrets
 .env
 *.env
+.env
+backend/.env
+.azcli-fabric/
+backend/.azcli-fabric/
+reports/
