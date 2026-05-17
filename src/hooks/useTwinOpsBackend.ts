@@ -1,6 +1,6 @@
 import type { LiveTelemetry } from "../api/client";
 import { useTelemetryStream } from "./useTelemetryStream";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchAgents,
   fetchAnalyze,
@@ -165,10 +165,11 @@ export function useTwinOpsBackend(pollMs = 3000) {
   const [pollError, setPollError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);	
-  const { latestTelemetry, streamStatus } = useTelemetryStream(baseUrl);
-  const streamIsLive = streamStatus === "ok";
+  const { latestTelemetry } = useTelemetryStream(baseUrl);
   const [anomalyResults, setAnomalyResults] = useState<AnomalyResult[]>([]);
   const [latestAnomaly, setLatestAnomaly] = useState<AnomalyResult | null>(null);
+  const [ignoreCriticalStreamAfterReset, setIgnoreCriticalStreamAfterReset] = useState(false);
+  const anomalyScenarioVersion = useRef(0);
 
   const refresh = useCallback(async () => {
     try {
@@ -183,9 +184,7 @@ export function useTwinOpsBackend(pollMs = 3000) {
         fetchWorkOrders(baseUrl),
       ]);
 
-      if (!streamIsLive) {
-        setTelemetry(tel);
-      }
+      setTelemetry(tel);
       setDigitalTwin(twin);
       setAnalyze(ann);
       setAgentsApi(agents);
@@ -194,14 +193,20 @@ export function useTwinOpsBackend(pollMs = 3000) {
       setReports(reportData);
       setWorkOrders(orders);
 
-      try {
-        const anomalyHistory = await fetchAnomalyResults(baseUrl);
-        const normalizedResults = anomalyHistory.results ?? anomalyHistory.items ?? anomalyHistory.data ?? [];
+      if (tel.motor_A.status === "Critical") {
+        try {
+          const anomalyHistory = await fetchAnomalyResults(baseUrl);
+          const normalizedResults = anomalyHistory.results ?? anomalyHistory.items ?? anomalyHistory.data ?? [];
 
-        setAnomalyResults(normalizedResults);
-        setLatestAnomaly(normalizedResults[0] ?? null);
-      } catch {
-      setAnomalyResults([]);
+          setAnomalyResults(normalizedResults);
+          setLatestAnomaly(normalizedResults[0] ?? null);
+        } catch {
+          setAnomalyResults([]);
+          setLatestAnomaly(null);
+        }
+      } else {
+        setAnomalyResults([]);
+        setLatestAnomaly(null);
       }
 
       setPollError(null);
@@ -210,7 +215,33 @@ export function useTwinOpsBackend(pollMs = 3000) {
       const msg = e instanceof Error ? e.message : "Backend unreachable";
       setPollError(msg);
     }
-  }, [baseUrl, streamIsLive]);
+  }, [baseUrl]);
+
+  const refreshCoreState = useCallback(async () => {
+    try {
+      const [tel, twin, agents, dash, alertQueue, orders] = await Promise.all([
+        fetchTelemetry(baseUrl),
+        fetchDigitalTwin(baseUrl),
+        fetchAgents(baseUrl),
+        fetchDashboard(baseUrl),
+        fetchAlerts(baseUrl),
+        fetchWorkOrders(baseUrl),
+      ]);
+
+      setTelemetry(tel);
+      setDigitalTwin(twin);
+      setAgentsApi(agents);
+      setDashboard(dash);
+      setAlerts(alertQueue);
+      setWorkOrders(orders);
+      setPollError(null);
+      setReady(true);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Backend unreachable";
+      setPollError(msg);
+      throw e;
+    }
+  }, [baseUrl]);
 
   useEffect(() => {
     void refresh();
@@ -221,13 +252,27 @@ export function useTwinOpsBackend(pollMs = 3000) {
   useEffect(() => {
     if (!latestTelemetry) return;
 
-    setTelemetry((previous) =>
-      liveTelemetryToTelemetryApiResponse(latestTelemetry, previous)
-    );
+    setTelemetry((previous) => {
+      const next = liveTelemetryToTelemetryApiResponse(latestTelemetry, previous);
+
+      if (ignoreCriticalStreamAfterReset && next.motor_A.status === "Critical") {
+        return previous;
+      }
+
+      if (previous?.motor_A?.status === "Critical" && next.motor_A.status !== "Critical") {
+        return previous;
+      }
+
+      if (ignoreCriticalStreamAfterReset && next.motor_A.status !== "Critical") {
+        setIgnoreCriticalStreamAfterReset(false);
+      }
+
+      return next;
+    });
 
     setPollError(null);
     setReady(true);
-  }, [latestTelemetry]);
+  }, [ignoreCriticalStreamAfterReset, latestTelemetry]);
   const anomalyActive = telemetry?.motor_A?.status === "Critical";
 
   const assets: Asset[] = useMemo(() => {
@@ -238,19 +283,25 @@ export function useTwinOpsBackend(pollMs = 3000) {
   const triggerAnomaly = useCallback(async () => {
     setActionError(null);
     try {
+      anomalyScenarioVersion.current += 1;
+      setIgnoreCriticalStreamAfterReset(false);
       await postTriggerAnomaly(baseUrl);
-      await refresh();
+      await refreshCoreState();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Trigger failed");
       throw e;
     }
-  }, [baseUrl, refresh]);
+  }, [baseUrl, refreshCoreState]);
 
   const detectAnomaly = useCallback(async () => {
   setActionError(null);
+  const requestScenarioVersion = anomalyScenarioVersion.current;
 
   try {
     const response = await postDetectAnomaly(baseUrl);
+    if (requestScenarioVersion !== anomalyScenarioVersion.current) {
+      return response;
+    }
 
     if (response.result) {
       setLatestAnomaly(response.result);
@@ -268,14 +319,18 @@ export function useTwinOpsBackend(pollMs = 3000) {
   const resetAnomaly = useCallback(async () => {
     setActionError(null);
     try {
+      anomalyScenarioVersion.current += 1;
       await postResetAnomaly(baseUrl);
+      setIgnoreCriticalStreamAfterReset(true);
       setWorkOrders([]);
-      await refresh();
+      setAnomalyResults([]);
+      setLatestAnomaly(null);
+      await refreshCoreState();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Reset failed");
       throw e;
     }
-  }, [baseUrl, refresh]);
+  }, [baseUrl, refreshCoreState]);
 
   const runAgents = useCallback(async () => {
     setActionError(null);
@@ -302,7 +357,7 @@ export function useTwinOpsBackend(pollMs = 3000) {
         due: "Within 24 hours",
       });
       setWorkOrders((orders) => [created, ...orders.filter((order) => order.id !== created.id)]);
-      await refresh();
+      void refresh();
       return created;
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Create work order failed");
@@ -317,8 +372,8 @@ export function useTwinOpsBackend(pollMs = 3000) {
         approved_by: "Shift Supervisor",
         note: "Approved from TwinOps frontend.",
       });
-      setWorkOrders((orders) => orders.map((order) => (order.id === updated.id ? updated : order)));
-      await refresh();
+      setWorkOrders((orders) => [updated, ...orders.filter((order) => order.id !== updated.id)]);
+      void refresh();
       return updated;
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Approve work order failed");
@@ -333,8 +388,8 @@ export function useTwinOpsBackend(pollMs = 3000) {
         dispatched_by: "Maintenance Coordinator",
         note: "Dispatched from TwinOps frontend.",
       });
-      setWorkOrders((orders) => orders.map((order) => (order.id === updated.id ? updated : order)));
-      await refresh();
+      setWorkOrders((orders) => [updated, ...orders.filter((order) => order.id !== updated.id)]);
+      void refresh();
       return updated;
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Dispatch work order failed");

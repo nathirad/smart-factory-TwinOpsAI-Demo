@@ -182,3 +182,48 @@ def get_mock_twin_dependencies(twin_id: str) -> dict[str, Any]:
         "dependencies": dependencies,
         "graph": graph,
     }
+
+
+def seed_demo_graph() -> dict[str, Any]:
+    client = get_client()
+
+    created_twins = []
+    for twin_id, twin in MOCK_TWINS.items():
+        payload = {
+            "$metadata": {"$model": twin["model"]},
+            "name": twin["name"],
+            "machineType": twin["machineType"],
+            "location": twin["location"],
+            "status": twin["status"],
+            "healthScore": twin["healthScore"],
+            "vibration": twin["vibration"],
+            "temperature": twin["temperature"],
+            "energyLoad": twin["energyLoad"],
+        }
+        client.upsert_digital_twin(twin_id, payload)
+        created_twins.append(twin_id)
+
+    relationships = [
+        ("motor-A", "motor-A-feeds-motor-B", "feedsTo", "motor-B"),
+        ("motor-A", "motor-A-feeds-conveyor-C", "feedsTo", "conveyor-C"),
+        ("motor-B", "motor-B-feeds-conveyor-C", "feedsTo", "conveyor-C"),
+    ]
+    created_relationships = []
+    for source_id, relationship_id, relationship_name, target_id in relationships:
+        client.upsert_relationship(
+            source_id,
+            relationship_id,
+            {
+                "$relationshipId": relationship_id,
+                "$sourceId": source_id,
+                "$relationshipName": relationship_name,
+                "$targetId": target_id,
+            },
+        )
+        created_relationships.append(relationship_id)
+
+    return {
+        "source": "azure-digital-twins",
+        "twins": created_twins,
+        "relationships": created_relationships,
+    }
