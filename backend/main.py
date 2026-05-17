@@ -43,7 +43,8 @@ except ImportError:
     SearchClient = None
 
 
-load_dotenv()
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 APP_MODE = os.getenv("APP_MODE", "mock").lower()
 WORK_ORDER_SYSTEM_NAME = os.getenv(
@@ -1363,62 +1364,52 @@ async def fabric_anomalies_latest(
         )
 
 
-@app.get("/api/fabric/anomaly/latest")
-async def get_fabric_anomaly_latest(
+@app.get("/api/fabric/adt/impact/latest")
+async def fabric_adt_impact_latest(
     limit: int = Query(default=20, ge=1, le=100),
-    minutes: int = Query(default=120, ge=1, le=1440),
+    minutes: int = Query(default=30, ge=1, le=1440),
 ):
     try:
         rows = get_fabric_latest_telemetry(limit=limit, minutes=minutes)
-        alerts = []
 
-        for row in rows:
-            temperature = float(row.get("temperature") or 0)
-            vibration = float(row.get("vibration") or 0)
-            energy_load = float(row.get("energyLoad") or 0)
-            status = str(row.get("status") or "").upper()
+        if not rows:
+            return {
+                "status": "ok",
+                "source": "fabric-kql-plus-azure-digital-twins",
+                "message": "No recent telemetry from Fabric",
+                "count": 0,
+                "latestTelemetry": None,
+                "anomaly": None,
+                "adtImpact": None,
+            }
 
-            reasons = []
+        latest = rows[0]
+        machine_id = str(latest.get("machineId") or "motor-A")
 
-            if temperature > 76:
-                reasons.append(f"temperature high: {temperature}")
+        severity, reasons = classify_fabric_telemetry(latest)
 
-            if vibration > 3.5:
-                reasons.append(f"vibration high: {vibration}")
-
-            if energy_load > 20:
-                reasons.append(f"energyLoad high: {energy_load}")
-
-            if status == "WARN":
-                reasons.append("device status is WARN")
-
-            if reasons:
-                severity = "CRITICAL" if (
-                    temperature > 76
-                    or vibration > 3.5
-                    or energy_load > 20
-                    or status == "WARN"
-                ) else "WARNING"
-
-                alerts.append({
-                    "timestamp": row.get("timestamp"),
-                    "machineId": row.get("machineId"),
-                    "deviceId": row.get("deviceId"),
-                    "severity": severity,
-                    "status": status,
-                    "temperature": temperature,
-                    "vibration": vibration,
-                    "energyLoad": energy_load,
-                    "reasons": reasons,
-                    "recommendedAction": "Inspect motor-A and create maintenance work order",
-                })
+        try:
+            adt_impact = get_twin_dependencies(machine_id)
+        except Exception as exc:
+            print(f"ADT impact lookup failed: {exc}. Returning mock dependency graph.")
+            adt_impact = get_mock_twin_dependencies(machine_id)
 
         return {
             "status": "ok",
-            "source": "microsoft-fabric-kql",
-            "table": "telemetry_v2",
-            "count": len(alerts),
-            "alerts": alerts,
+            "source": "fabric-kql-plus-azure-digital-twins",
+            "fabric": {
+                "database": os.getenv("FABRIC_KQL_DATABASE", "twinopsai_kql_db"),
+                "table": os.getenv("FABRIC_KQL_TABLE", "telemetry_v2"),
+                "count": len(rows),
+            },
+            "latestTelemetry": latest,
+            "anomaly": {
+                "machineId": machine_id,
+                "severity": severity,
+                "isAnomaly": severity != "NORMAL",
+                "reasons": reasons,
+            },
+            "adtImpact": adt_impact,
         }
 
     except Exception as error:
@@ -1426,7 +1417,7 @@ async def get_fabric_anomaly_latest(
             status_code=500,
             detail={
                 "status": "error",
-                "source": "microsoft-fabric-kql",
+                "source": "fabric-kql-plus-azure-digital-twins",
                 "message": str(error),
             },
         )
@@ -1459,6 +1450,171 @@ async def fabric_dashboard(
                 "criticalCount": critical_count,
                 "assetHealth": "Critical" if critical_count > 0 else "Normal",
             },
+        }
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status": "error",
+                "source": "microsoft-fabric-kql",
+                "message": str(error),
+            },
+        )
+
+
+def classify_fabric_telemetry(row: dict):
+    temperature = float(row.get("temperature") or 0)
+    vibration = float(row.get("vibration") or 0)
+    energy_load = float(row.get("energyLoad") or 0)
+    status = str(row.get("status") or "").upper()
+
+    reasons = []
+
+    if temperature > 76:
+        reasons.append(f"temperature high: {temperature}")
+
+    if vibration > 3.5:
+        reasons.append(f"vibration high: {vibration}")
+
+    if energy_load > 20:
+        reasons.append(f"energyLoad high: {energy_load}")
+
+    if status == "WARN":
+        reasons.append("device status is WARN")
+
+    severity = "NORMAL"
+
+    if reasons:
+        severity = "CRITICAL" if (
+            temperature > 76
+            or vibration > 3.5
+            or energy_load > 20
+            or status == "WARN"
+        ) else "WARNING"
+
+    return severity, reasons
+
+
+@app.get("/api/fabric/adt/impact/latest")
+@app.get("/api/fabric/adt/impact/latest")
+async def fabric_adt_impact_latest(
+    machine_id: str = Query(default="motor-A"),
+    limit: int = Query(default=20, ge=1, le=100),
+    minutes: int = Query(default=30, ge=1, le=1440),
+):
+    fabric_status = "not_checked"
+    fabric_error = None
+    rows = []
+    latest = None
+
+    try:
+        rows = get_fabric_latest_telemetry(limit=limit, minutes=minutes)
+        fabric_status = "ok"
+
+        if rows:
+            latest = rows[0]
+            machine_id = str(latest.get("machineId") or machine_id)
+
+    except Exception as error:
+        fabric_status = "error"
+        fabric_error = str(error)
+
+    if latest:
+        severity, reasons = classify_fabric_telemetry(latest)
+    else:
+        severity = "UNKNOWN"
+        reasons = [
+            "Fabric telemetry is not available, using selected ADT twin instead"
+        ]
+
+    try:
+        adt_impact = get_twin_dependencies(machine_id)
+        adt_status = "ok"
+    except Exception as error:
+        adt_status = "fallback"
+        adt_impact = get_mock_twin_dependencies(machine_id)
+        adt_impact["fallbackReason"] = str(error)
+
+    return {
+        "status": "ok",
+        "source": "fabric-kql-plus-azure-digital-twins",
+        "mode": "degraded" if fabric_status == "error" or adt_status == "fallback" else "live",
+        "selectedTwin": machine_id,
+        "fabric": {
+            "status": fabric_status,
+            "database": os.getenv("FABRIC_KQL_DATABASE", "twinopsai_kql_db"),
+            "table": os.getenv("FABRIC_KQL_TABLE", "telemetry_v2"),
+            "count": len(rows),
+            "error": fabric_error,
+        },
+        "latestTelemetry": latest,
+        "anomaly": {
+            "machineId": machine_id,
+            "severity": severity,
+            "isAnomaly": severity not in ["NORMAL", "UNKNOWN"],
+            "reasons": reasons,
+        },
+        "adt": {
+            "status": adt_status,
+            "impact": adt_impact,
+        },
+    }
+
+@app.get("/api/fabric/anomaly/latest")
+async def get_fabric_anomaly_latest(
+    limit: int = Query(default=20, ge=1, le=100),
+    minutes: int = Query(default=30, ge=1, le=1440),
+):
+    try:
+        rows = get_fabric_latest_telemetry(limit=limit, minutes=minutes)
+
+        alerts = []
+
+        for row in rows:
+            temperature = float(row.get("temperature") or 0)
+            vibration = float(row.get("vibration") or 0)
+            energy_load = float(row.get("energyLoad") or 0)
+            status = str(row.get("status") or "").upper()
+
+            reasons = []
+
+            if temperature > 76:
+                reasons.append(f"temperature high: {temperature}")
+
+            if vibration > 3.5:
+                reasons.append(f"vibration high: {vibration}")
+
+            if energy_load > 20:
+                reasons.append(f"energyLoad high: {energy_load}")
+
+            if status == "WARN":
+                reasons.append("device status is WARN")
+
+            if reasons:
+                severity = "CRITICAL" if (
+                    temperature > 76 or vibration > 3.5 or energy_load > 20
+                ) else "WARNING"
+
+                alerts.append({
+                    "timestamp": row.get("timestamp"),
+                    "machineId": row.get("machineId"),
+                    "deviceId": row.get("deviceId"),
+                    "severity": severity,
+                    "status": status,
+                    "temperature": temperature,
+                    "vibration": vibration,
+                    "energyLoad": energy_load,
+                    "reasons": reasons,
+                    "recommendedAction": "Inspect motor-A and create maintenance work order",
+                })
+
+        return {
+            "status": "ok",
+            "source": "microsoft-fabric-kql",
+            "table": "telemetry_v2",
+            "count": len(alerts),
+            "alerts": alerts,
         }
 
     except Exception as error:
