@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Literal
 from urllib.error import URLError
 from urllib.request import Request as UrlRequest, urlopen
-from services.adt_service import get_mock_twin_dependencies, get_twin_dependencies
+from services.adt_service import get_mock_twin_dependencies, get_twin_dependencies, seed_demo_graph
 from fastapi.responses import StreamingResponse
 from services.anomaly_service import detect_anomaly_from_telemetry
 from services.fabric_kql import (
@@ -26,8 +26,21 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from services.cosmos_service import save_anomaly_result, list_anomaly_results, cosmos_enabled
+from services.cosmos_service import (
+    cosmos_enabled,
+    cosmos_state_status,
+    get_work_order as get_cosmos_work_order,
+    list_agent_decisions,
+    list_anomaly_results,
+    list_energy_insights,
+    list_work_orders as list_cosmos_work_orders,
+    save_agent_decision,
+    save_anomaly_result,
+    save_energy_insight,
+    upsert_work_order,
+)
 from features.agents_api import register_agents_routes
+from services.key_vault_service import key_vault_status
 
 try:
     from openai import AzureOpenAI, OpenAI
@@ -52,6 +65,7 @@ WORK_ORDER_SYSTEM_NAME = os.getenv(
 )
 CMMS_DISPATCH_WEBHOOK_URL = os.getenv("CMMS_DISPATCH_WEBHOOK_URL")
 CMMS_DISPATCH_BEARER_TOKEN = os.getenv("CMMS_DISPATCH_BEARER_TOKEN")
+APPROVAL_CALLBACK_TOKEN = os.getenv("APPROVAL_CALLBACK_TOKEN")
 DASHBOARD_DATA_ENDPOINT = os.getenv("DASHBOARD_DATA_ENDPOINT")
 ALERTS_DATA_ENDPOINT = os.getenv("ALERTS_DATA_ENDPOINT")
 REPORTS_DATA_ENDPOINT = os.getenv("REPORTS_DATA_ENDPOINT")
@@ -167,7 +181,24 @@ class WorkOrderDispatchRequest(BaseModel):
     note: str | None = None
 
 
-WorkOrderStatus = Literal["Draft", "Awaiting approval", "Approved", "Dispatched"]
+class WorkOrderApprovalCallback(BaseModel):
+    decision: Literal["approved", "rejected"]
+    approved_by: str | None = None
+    note: str | None = None
+    externalApprovalId: str | None = None
+    token: str | None = None
+
+
+class AgentTriggerRequest(BaseModel):
+    sessionId: str | None = None
+    anomalyId: str | None = None
+    machineId: str = "motor-A"
+    severity: str = "High"
+    source: str = "cosmos-trigger"
+    telemetry: dict | None = None
+
+
+WorkOrderStatus = Literal["Draft", "Awaiting approval", "Approved", "Rejected", "Dispatched"]
 WorkOrderPriority = Literal["High", "Medium", "Low"]
 DispatchStatus = Literal["Not dispatched", "Pending external dispatch", "Dispatched", "Failed"]
 
@@ -206,6 +237,8 @@ app_state = {
     "agent_cascade_last_run": None,
     "work_orders": {},
     "next_work_order_sequence": 1,
+    "recommendation_cache": None,
+    "recommendation_cache_key": None,
 }
 
 
@@ -344,6 +377,7 @@ def build_integrations_status():
                 "configured": configured(os.getenv("COSMOS_ENDPOINT")) and configured(os.getenv("COSMOS_KEY")),
                 "database": os.getenv("COSMOS_DB", "twinopsai-anomaly-db"),
                 "container": os.getenv("COSMOS_CONTAINER", "anomaly-results"),
+                "stateStore": cosmos_state_status(),
             },
             "fabric_kql": {
                 "configured": configured(os.getenv("FABRIC_KQL_CLUSTER_URI")),
@@ -376,6 +410,12 @@ def build_integrations_status():
                 "configured": configured(CMMS_DISPATCH_WEBHOOK_URL),
                 "system_name": WORK_ORDER_SYSTEM_NAME,
                 "auth_configured": configured(CMMS_DISPATCH_BEARER_TOKEN),
+                "approvalCallbackTokenConfigured": configured(APPROVAL_CALLBACK_TOKEN),
+            },
+            "key_vault": key_vault_status(),
+            "managed_identity": {
+                "configured": configured(os.getenv("AZURE_CLIENT_ID")) or configured(os.getenv("IDENTITY_ENDPOINT")),
+                "authModel": "DefaultAzureCredential",
             },
         },
     }
@@ -725,8 +765,25 @@ def append_work_order_history(work_order: dict, event: str):
 
 def get_work_order_or_404(work_order_id: str):
     work_order = app_state["work_orders"].get(work_order_id)
+    if not work_order and APP_MODE == "production":
+        work_order = get_cosmos_work_order(work_order_id)
+        if work_order:
+            app_state["work_orders"][work_order_id] = work_order
+
     if not work_order:
         raise HTTPException(status_code=404, detail=f"Work order {work_order_id} not found")
+    return work_order
+
+
+def persist_work_order(work_order: dict):
+    app_state["work_orders"][work_order["id"]] = work_order
+    if APP_MODE == "production":
+        saved = upsert_work_order(work_order)
+        if saved.get("cosmosSaved"):
+            work_order["cosmosSaved"] = True
+        elif saved.get("cosmosError"):
+            work_order["cosmosSaved"] = False
+            work_order["cosmosError"] = saved.get("cosmosError")
     return work_order
 
 
@@ -784,7 +841,7 @@ def dispatch_to_external_system(work_order: dict):
             work_order,
             f"Production dispatch prepared for {WORK_ORDER_SYSTEM_NAME}; no CMMS_DISPATCH_WEBHOOK_URL configured.",
         )
-        return work_order
+        return persist_work_order(work_order)
 
     payload = json.dumps(work_order).encode("utf-8")
     headers = {"Content-Type": "application/json"}
@@ -806,7 +863,7 @@ def dispatch_to_external_system(work_order: dict):
         work_order["dispatchStatus"] = "Failed"
         work_order["dispatchError"] = str(exc)
         append_work_order_history(work_order, f"External dispatch failed: {exc}")
-        return work_order
+        return persist_work_order(work_order)
 
     work_order["status"] = "Dispatched"
     work_order["dispatchStatus"] = "Dispatched"
@@ -817,7 +874,7 @@ def dispatch_to_external_system(work_order: dict):
         or external_response.get("id")
     )
     append_work_order_history(work_order, f"Work order dispatched to {WORK_ORDER_SYSTEM_NAME}.")
-    return work_order
+    return persist_work_order(work_order)
 
 
 @app.post("/api/ingest-telemetry")
@@ -885,6 +942,9 @@ async def get_telemetry():
 async def trigger_anomaly():
     app_state["is_anomaly_active"] = True
     app_state["anomaly_start_time"] = now_string()
+    app_state["latest_ingested_data"] = critical_motor_a()
+    app_state["recommendation_cache"] = None
+    app_state["recommendation_cache_key"] = None
     # Agents API feature: manual anomaly trigger also starts the simulated Azure agent cascade.
     app_state["agent_cascade_started"] = True
     app_state["agent_cascade_last_run"] = app_state["anomaly_start_time"]
@@ -904,6 +964,8 @@ async def reset_anomaly():
     app_state["agent_cascade_last_run"] = None
     app_state["work_orders"] = {}
     app_state["next_work_order_sequence"] = 1
+    app_state["recommendation_cache"] = None
+    app_state["recommendation_cache_key"] = None
 
     return {
         "Message": "Anomaly simulation reset to normal state.",
@@ -924,6 +986,27 @@ async def get_twin_dependencies_api(twin_id: str):
     except Exception as exc:
         print(f"Azure Digital Twins dependency lookup failed: {exc}. Returning mock dependency graph.")
         return get_mock_twin_dependencies(twin_id)
+
+
+@app.post("/api/twins/seed-demo-graph")
+async def seed_twin_demo_graph():
+    try:
+        result = seed_demo_graph()
+        return {
+            "status": "ok",
+            "mode": APP_MODE,
+            **result,
+        }
+    except Exception as exc:
+        return {
+            "status": "fallback",
+            "mode": APP_MODE,
+            "source": "mock-digital-twins",
+            "message": "Azure Digital Twins seed was not applied. Returning the mock graph shape for local/demo use.",
+            "error": str(exc),
+            "mockGraph": get_mock_twin_dependencies("motor-A"),
+        }
+
 
 @app.get("/api/digital-twin")
 async def get_digital_twin():
@@ -1013,6 +1096,9 @@ async def get_ai_recommendations():
         "load": 70.0,
         "status": "Critical",
     }
+    cache_key = app_state.get("anomaly_start_time") or "active-anomaly"
+    if app_state.get("recommendation_cache_key") == cache_key and app_state.get("recommendation_cache"):
+        return app_state["recommendation_cache"]
 
     retrieved_context = MOCK_KNOWLEDGE_BASE
 
@@ -1046,6 +1132,8 @@ async def get_ai_recommendations():
     }
 
     if APP_MODE == "mock" or not openai_client:
+        app_state["recommendation_cache"] = fallback_response
+        app_state["recommendation_cache_key"] = cache_key
         return fallback_response
 
     system_prompt = f"""
@@ -1094,9 +1182,14 @@ async def get_ai_recommendations():
             temperature=0.1,
         )
 
-        return json.loads(response.choices[0].message.content)
+        generated = json.loads(response.choices[0].message.content)
+        app_state["recommendation_cache"] = generated
+        app_state["recommendation_cache_key"] = cache_key
+        return generated
     except Exception as exc:
         print(f"OpenAI generation failed: {exc}. Returning fallback response.")
+        app_state["recommendation_cache"] = fallback_response
+        app_state["recommendation_cache_key"] = cache_key
         return fallback_response
 
 @app.get("/api/telemetry/live")
@@ -1191,6 +1284,13 @@ async def get_roadmap_report():
 
 @app.get("/api/work-orders", response_model=list[WorkOrder])
 async def list_work_orders():
+    if APP_MODE == "production":
+        cosmos_orders = list_cosmos_work_orders()
+        if cosmos_orders:
+            for item in cosmos_orders:
+                app_state["work_orders"][item["id"]] = item
+            return cosmos_orders
+
     return list(app_state["work_orders"].values())
 
 
@@ -1204,9 +1304,8 @@ async def create_work_order(payload: WorkOrderCreateRequest | None = None):
 
     request_payload = payload or WorkOrderCreateRequest()
     work_order = build_work_order_from_recommendation(request_payload)
-    app_state["work_orders"][work_order["id"]] = work_order
 
-    return work_order
+    return persist_work_order(work_order)
 
 
 @app.get("/api/work-orders/{work_order_id}", response_model=WorkOrder)
@@ -1227,7 +1326,7 @@ async def approve_work_order(work_order_id: str, payload: WorkOrderApprovalReque
     note = f" Note: {request_payload.note}" if request_payload.note else ""
     append_work_order_history(work_order, f"{approver} approved the maintenance action.{note}")
 
-    return work_order
+    return persist_work_order(work_order)
 
 
 @app.post("/api/work-orders/{work_order_id}/dispatch", response_model=WorkOrder)
@@ -1250,7 +1349,108 @@ async def dispatch_work_order(work_order_id: str, payload: WorkOrderDispatchRequ
     work_order["dispatchError"] = None
     append_work_order_history(work_order, "Work order dispatched to the mock maintenance team.")
 
-    return work_order
+    return persist_work_order(work_order)
+
+
+@app.post("/api/work-orders/{work_order_id}/approval-callback", response_model=WorkOrder)
+async def work_order_approval_callback(work_order_id: str, payload: WorkOrderApprovalCallback):
+    if APPROVAL_CALLBACK_TOKEN and payload.token != APPROVAL_CALLBACK_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid approval callback token")
+
+    work_order = get_work_order_or_404(work_order_id)
+    approver = payload.approved_by or "External approver"
+    note = f" Note: {payload.note}" if payload.note else ""
+    external_id = f" External approval id: {payload.externalApprovalId}." if payload.externalApprovalId else ""
+
+    if payload.decision == "approved":
+        work_order["status"] = "Approved"
+        append_work_order_history(work_order, f"{approver} approved via external approval callback.{external_id}{note}")
+    else:
+        work_order["status"] = "Rejected"
+        work_order["dispatchStatus"] = "Not dispatched"
+        append_work_order_history(work_order, f"{approver} rejected via external approval callback.{external_id}{note}")
+
+    return persist_work_order(work_order)
+
+
+@app.post("/api/agent/trigger")
+async def trigger_agent_workflow(payload: AgentTriggerRequest | None = None):
+    request_payload = payload or AgentTriggerRequest()
+    session_id = request_payload.sessionId or f"session-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    telemetry = request_payload.telemetry or build_telemetry_snapshot().get("motor_A", {})
+
+    app_state["agent_cascade_started"] = True
+    app_state["agent_cascade_last_run"] = now_string()
+
+    decision = {
+        "sessionId": session_id,
+        "anomalyId": request_payload.anomalyId,
+        "machineId": request_payload.machineId,
+        "severity": request_payload.severity,
+        "source": request_payload.source,
+        "status": "queued",
+        "orchestrator": "backend-simulated-orchestrator",
+        "foundryRuntimeCalled": False,
+        "recommendedNextAction": "Run /api/agents or /api/analyze, then create a work order if supervisor approval is needed.",
+        "telemetry": telemetry,
+    }
+    saved_decision = save_agent_decision(session_id, decision)
+
+    return {
+        "status": "accepted",
+        "mode": APP_MODE,
+        "sessionId": session_id,
+        "foundryRuntimeCalled": False,
+        "message": "Agent trigger accepted. Foundry runtime is intentionally not called in this scope.",
+        "decision": saved_decision,
+    }
+
+
+@app.get("/api/agent/decisions")
+async def get_agent_decisions(sessionId: str | None = None, limit: int = 20):
+    decisions = list_agent_decisions(session_id=sessionId, limit=limit)
+    if not decisions and app_state.get("agent_cascade_started"):
+        decisions = [
+            {
+                "id": "local-agent-cascade",
+                "sessionId": app_state.get("agent_cascade_last_run") or "local",
+                "source": "local-memory",
+                "status": "completed",
+                "foundryRuntimeCalled": False,
+                "recommendedNextAction": "Review AI recommendation and create work order.",
+            }
+        ]
+
+    return {
+        "status": "ok",
+        "source": "cosmos-db" if decisions and decisions[0].get("cosmosSaved") else "local-fallback",
+        "count": len(decisions),
+        "decisions": decisions,
+    }
+
+
+@app.get("/api/energy/insights")
+async def get_energy_insights(deviceId: str | None = None, limit: int = 20):
+    insights = list_energy_insights(device_id=deviceId, limit=limit)
+    if not insights:
+        current = build_telemetry_snapshot().get("motor_A", {})
+        insights = [
+            {
+                "id": "local-energy-insight",
+                "deviceId": "motor-A",
+                "source": "local-fallback",
+                "energyLoad": current.get("load") or current.get("energyLoad"),
+                "correlation": "Energy load is correlated with the active Motor A anomaly scenario." if app_state["is_anomaly_active"] else "No active energy anomaly detected.",
+                "createdAt": now_string(),
+            }
+        ]
+
+    return {
+        "status": "ok",
+        "source": "cosmos-db" if insights and insights[0].get("cosmosSaved") else "local-fallback",
+        "count": len(insights),
+        "insights": insights,
+    }
 @app.get("/api/anomaly/results")
 async def get_anomaly_results(machineId: str | None = None, limit: int = 20):
     results = list_anomaly_results(machine_id=machineId, limit=limit)
@@ -1281,6 +1481,35 @@ async def detect_anomaly():
             agent_triggered=detection.get("isAnomaly", False),
         )
 
+        energy_insight = save_energy_insight(
+            device_id="motor-A",
+            insight={
+                "machineId": "motor-A",
+                "severity": detection.get("severity", "Low"),
+                "isAnomaly": detection.get("isAnomaly", False),
+                "energyLoad": motor_a.get("load") or motor_a.get("energyLoad"),
+                "correlation": "Energy load is elevated during Motor A anomaly detection."
+                if detection.get("isAnomaly", False)
+                else "Energy load is within expected range.",
+                "source": detection.get("source", "azure-ml-managed-endpoint"),
+            },
+        )
+
+        agent_decision = save_agent_decision(
+            session_id=result["id"],
+            decision={
+                "anomalyId": result["id"],
+                "machineId": "motor-A",
+                "severity": detection.get("severity", "Low"),
+                "source": "anomaly-detect-api",
+                "status": "queued" if detection.get("isAnomaly", False) else "not-required",
+                "foundryRuntimeCalled": False,
+                "recommendedNextAction": "Start agent cascade and prepare maintenance recommendation."
+                if detection.get("isAnomaly", False)
+                else "Continue monitoring.",
+            },
+        )
+
         if detection.get("isAnomaly", False):
             update_anomaly_state_from_metrics({
                 "vibration": float(motor_a.get("vibration", 3.6)),
@@ -1294,6 +1523,8 @@ async def detect_anomaly():
             "cosmosEnabled": cosmos_enabled(),
             "detection": detection,
             "result": result,
+            "energyInsight": energy_insight,
+            "agentDecision": agent_decision,
             "agentTrigger": {
                 "enabled": detection.get("isAnomaly", False),
                 "target": "phase-5-agent-orchestrator",

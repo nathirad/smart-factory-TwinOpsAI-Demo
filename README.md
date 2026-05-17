@@ -88,27 +88,6 @@ The demo also highlights Azure service roles:
 
 No backend or external API is required for this MVP.
 
-## Project Structure
-
-```text
-src/
-  App.tsx                 # Current multi-page demo shell and mocked scenario logic
-  main.tsx
-  styles.css
-  types.ts                # Shared demo types for assets, alerts, agents, reports, and work orders
-  vite-env.d.ts
-  components/             # Earlier reusable dashboard components retained in the project
-  data/
-    simulatedTelemetry.ts # Earlier telemetry generator retained for future expansion
-  utils/
-    anomalyDetection.ts   # Explainable anomaly helper logic retained for future expansion
-ui/
-  dashboard.png
-  Digital-Twin.png
-  Agents.png
-  Recommendations.png
-```
-
 ## Run Locally
 
 ```bash
@@ -128,26 +107,26 @@ http://localhost:5173
 npm run build
 ```
 
-The current build passes. Vite may warn that the JavaScript bundle is larger than 500 kB because this demo intentionally bundles charting and icon libraries for a polished pitch experience.
-
 ## Preview Production Build
 
 ```bash
 npm run preview
 ```
 
-## Deploy To Vercel
+## Deployment
 
-```bash
-npx vercel deploy --prod
-```
-
-Production alias:
+The project is deployed on Vercel:
 
 ```text
 https://smart-factory-alpha.vercel.app
 ```
 
-## Hackathon Positioning
+For a new deployment:
 
-This is a frontend-first MVP built for storytelling and stakeholder alignment. A production version would connect to real factory data through PLC, SCADA, OPC UA, MQTT, or Azure IoT Hub; persist operational history in a backend or lakehouse; ground recommendations with SOP/manual retrieval; and integrate with a CMMS or maintenance work-order system.
+```bash
+npx vercel deploy --prod
+```
+
+## Hackathon Notes
+
+This is a frontend-first MVP. In a production version, telemetry would come from factory systems such as PLCs, IoT gateways, OPC UA, MQTT, or Azure IoT Hub. The summarized machine context can later be sent to GPT-4o or another AI reasoning layer, while a backend API can persist telemetry, digital twin state, recommendations, and maintenance work orders.

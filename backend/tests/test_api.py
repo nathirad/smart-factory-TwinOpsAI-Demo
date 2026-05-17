@@ -44,6 +44,8 @@ def test_openapi_is_available():
     assert "/api/telemetry" in paths
     assert "/api/dashboard" in paths
     assert "/api/work-orders" in paths
+    assert "/api/agent/trigger" in paths
+    assert "/api/energy/insights" in paths
 
 
 def test_ingest_telemetry_stores_latest_payload_and_triggers_anomaly():
@@ -114,6 +116,21 @@ def test_analyze_returns_low_without_anomaly_and_high_with_anomaly():
     assert critical["risk_level"] == "High"
     assert critical["retrieved_sop"]["document_id"]
     assert len(critical["recommended_actions"]) >= 1
+
+
+def test_analyze_is_stable_within_an_active_anomaly_scenario():
+    client.post("/api/trigger-anomaly")
+
+    first = client.get("/api/analyze").json()
+    main.app_state["latest_ingested_data"] = {
+        "vibration": 3.8,
+        "temperature": 82.0,
+        "load": 95.0,
+        "status": "Critical",
+    }
+    second = client.get("/api/analyze").json()
+
+    assert second == first
 
 
 def test_dashboard_alerts_oee_and_energy_in_normal_state():
@@ -202,6 +219,44 @@ def test_work_order_lifecycle_in_mock_mode():
     assert dispatch_response.json()["status"] == "Dispatched"
     assert dispatch_response.json()["dispatchStatus"] == "Dispatched"
     assert len(queue_response.json()) == 1
+
+
+def test_work_order_approval_callback_can_approve_or_reject():
+    client.post("/api/trigger-anomaly")
+    work_order = client.post("/api/work-orders").json()
+
+    approved = client.post(
+        f"/api/work-orders/{work_order['id']}/approval-callback",
+        json={"decision": "approved", "approved_by": "Logic App"},
+    )
+    rejected = client.post(
+        f"/api/work-orders/{work_order['id']}/approval-callback",
+        json={"decision": "rejected", "approved_by": "Logic App", "note": "Need safety review"},
+    )
+
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "Approved"
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "Rejected"
+
+
+def test_agent_trigger_and_energy_insights_have_fallbacks():
+    trigger = client.post(
+        "/api/agent/trigger",
+        json={
+            "sessionId": "session-test",
+            "machineId": "motor-A",
+            "severity": "High",
+            "telemetry": {"vibration": 3.5, "temperature": 80.0, "load": 91.0, "status": "Critical"},
+        },
+    )
+    decisions = client.get("/api/agent/decisions?sessionId=session-test").json()
+    insights = client.get("/api/energy/insights").json()
+
+    assert trigger.status_code == 200
+    assert trigger.json()["foundryRuntimeCalled"] is False
+    assert decisions["count"] >= 1
+    assert insights["count"] >= 1
 
 
 def test_dispatch_requires_approval():

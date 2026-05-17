@@ -1,5 +1,5 @@
 import { DigitalTwinImpactPanel } from "./components/DigitalTwinImpactPanel";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import type {
   AnalyzeApiResponse,
   AnalyzeRetrievedSop,
@@ -379,6 +379,10 @@ export default function App() {
   const [sidebarHidden, setSidebarHidden] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [currentWorkOrderId, setCurrentWorkOrderId] = useState<string | null>(null);
+  const [currentWorkOrderStatus, setCurrentWorkOrderStatus] = useState<GeneratedWorkOrder["status"] | null>(null);
+  const [workOrderActionBusy, setWorkOrderActionBusy] = useState(false);
+  const demoActionSequence = useRef(0);
 
   
   // Agents API integration: prefer backend cascade data and keep local mock builders as a fallback.
@@ -386,7 +390,18 @@ export default function App() {
   const activeAlert = useMemo(() => buildAlert(anomalyActive, telemetry, alerts?.alerts), [alerts, anomalyActive, telemetry]);
   const executionLog = useMemo(() => buildExecutionLog(anomalyActive), [anomalyActive]);
   const fallbackWorkOrder = useMemo(() => buildWorkOrder(anomalyActive ? "Awaiting approval" : "Draft"), [anomalyActive]);
-  const workOrder = useMemo(() => mapApiWorkOrder(workOrders[0]) ?? fallbackWorkOrder, [fallbackWorkOrder, workOrders]);
+  const currentApiWorkOrder = useMemo(
+    () => workOrders.find((order) => order.id === currentWorkOrderId) ?? null,
+    [currentWorkOrderId, workOrders],
+  );
+  const workOrder = useMemo(() => {
+    const mapped = mapApiWorkOrder(currentApiWorkOrder);
+    if (mapped) return currentWorkOrderStatus ? { ...mapped, status: currentWorkOrderStatus } : mapped;
+    if (currentWorkOrderStatus) {
+      return { ...fallbackWorkOrder, status: currentWorkOrderStatus };
+    }
+    return fallbackWorkOrder;
+  }, [currentApiWorkOrder, currentWorkOrderStatus, fallbackWorkOrder]);
   const activeAlerts = dashboard?.alerts?.filter((alert) => alert.status === "Active").length ?? (anomalyActive ? 1 : 0);
   const averageHealth =
     dashboard?.asset_health?.length
@@ -398,18 +413,30 @@ export default function App() {
   const previewLineDanger = digitalTwin?.line_status === "Critical" || anomalyActive;
 
   async function simulateAnomaly() {
+    const actionId = ++demoActionSequence.current;
+    setCurrentWorkOrderId(null);
+    setCurrentWorkOrderStatus("Awaiting approval");
+    setActivePage("agents");
+
     try {
       await triggerAnomaly();
-      await detectAnomaly();
-      setActivePage("agents");
+      if (actionId !== demoActionSequence.current) return;
+
+      void detectAnomaly().catch(() => {
+        /* useTwinOpsBackend sets actionError */
+      });
     } catch {
       /* useTwinOpsBackend sets actionError */
     }
   }
 
   async function resetDemo() {
-    try {
-      await resetAnomaly();
+    demoActionSequence.current += 1;
+      try {
+        setCurrentWorkOrderId(null);
+        setCurrentWorkOrderStatus(null);
+        setWorkOrderActionBusy(false);
+        await resetAnomaly();
       setActivePage("dashboard");
     } catch {
       /* useTwinOpsBackend sets actionError */
@@ -426,28 +453,64 @@ export default function App() {
   }
 
   async function approveAction() {
+    if (workOrderActionBusy) return;
+    setWorkOrderActionBusy(true);
+    setCurrentWorkOrderStatus("Approved");
+    setActivePage("work-orders");
+
     try {
-      const current = workOrders[0] ?? await createWorkOrder();
-      await approveWorkOrder(current.id);
+      const existingCurrent = currentWorkOrderId ? workOrders.find((order) => order.id === currentWorkOrderId) : undefined;
+      const current =
+        existingCurrent && (existingCurrent.status === "Draft" || existingCurrent.status === "Awaiting approval")
+          ? existingCurrent
+          : await createWorkOrder();
+      setCurrentWorkOrderId(current.id);
+      setCurrentWorkOrderStatus("Approved");
+      setActivePage("work-orders");
+      const approved = await approveWorkOrder(current.id);
+      setCurrentWorkOrderId(approved.id);
+      setCurrentWorkOrderStatus("Approved");
     } catch {
+      setCurrentWorkOrderStatus(anomalyActive ? "Awaiting approval" : null);
       /* useTwinOpsBackend sets actionError */
+    } finally {
+      setWorkOrderActionBusy(false);
     }
   }
 
   async function sendToMaintenance() {
+    if (workOrderActionBusy) return;
+    setWorkOrderActionBusy(true);
+    setCurrentWorkOrderStatus("Dispatched");
+    setActivePage("work-orders");
+
     try {
-      const current = workOrders[0] ?? await createWorkOrder();
+      const existingCurrent = currentWorkOrderId ? workOrders.find((order) => order.id === currentWorkOrderId) : undefined;
+      const current =
+        existingCurrent ??
+        await createWorkOrder();
+      setCurrentWorkOrderId(current.id);
+      setCurrentWorkOrderStatus("Dispatched");
+      setActivePage("work-orders");
       const approved = current.status === "Approved" ? current : await approveWorkOrder(current.id);
-      await dispatchWorkOrder(approved.id);
+      setCurrentWorkOrderId(approved.id);
+      const dispatched = await dispatchWorkOrder(approved.id);
+      setCurrentWorkOrderId(dispatched.id);
+      setCurrentWorkOrderStatus("Dispatched");
     } catch {
+      setCurrentWorkOrderStatus(anomalyActive ? "Approved" : null);
       /* useTwinOpsBackend sets actionError */
+    } finally {
+      setWorkOrderActionBusy(false);
     }
   }
 
   async function openWorkOrder() {
-    if (workOrders.length === 0 && anomalyActive) {
+    if (!currentWorkOrderId && anomalyActive) {
       try {
-        await createWorkOrder();
+        const created = await createWorkOrder();
+        setCurrentWorkOrderId(created.id);
+        setCurrentWorkOrderStatus(created.status);
       } catch {
         /* useTwinOpsBackend sets actionError */
       }
@@ -542,10 +605,11 @@ export default function App() {
                 onApprove={approveAction}
                 onSendToMaintenance={sendToMaintenance}
                 onOpenWorkOrder={openWorkOrder}
+                actionBusy={workOrderActionBusy}
               />
             ) : null}
             {activePage === "work-orders" ? (
-              <WorkOrdersPage workOrder={workOrder} workOrders={workOrders.map(mapApiWorkOrder).filter((order): order is GeneratedWorkOrder => Boolean(order))} onApprove={approveAction} onSendToMaintenance={sendToMaintenance} />
+              <WorkOrdersPage workOrder={workOrder} workOrders={workOrders.map(mapApiWorkOrder).filter((order): order is GeneratedWorkOrder => Boolean(order))} onApprove={approveAction} onSendToMaintenance={sendToMaintenance} actionBusy={workOrderActionBusy} />
             ) : null}
             {activePage === "reports" ? <ReportsPage reports={reports} /> : null}
           </div>
@@ -1069,6 +1133,7 @@ function RecommendationsPage({
   onApprove,
   onSendToMaintenance,
   onOpenWorkOrder,
+  actionBusy,
 }: {
   anomalyActive: boolean;
   analyze: AnalyzeApiResponse | null;
@@ -1077,6 +1142,7 @@ function RecommendationsPage({
   onApprove: () => void;
   onSendToMaintenance: () => void;
   onOpenWorkOrder: () => void;
+  actionBusy: boolean;
 }) {
   const insightTitle = analyze?.insight ?? (anomalyActive ? "Likely bearing wear" : "No active anomaly");
   const confidencePct = analyze ? parseConfidencePercent(analyze.confidence_score) : anomalyActive ? 87 : 12;
@@ -1165,11 +1231,11 @@ function RecommendationsPage({
           </p>
         </section>
         <section className="panel grid gap-3 p-5 sm:grid-cols-3">
-          <button type="button" onClick={onApprove} className="primary-button justify-center">
+          <button type="button" onClick={onApprove} disabled={actionBusy} className="primary-button justify-center disabled:cursor-not-allowed disabled:opacity-60">
             <Check className="h-5 w-5" />
             Approve Action
           </button>
-          <button type="button" onClick={onSendToMaintenance} className="secondary-button justify-center">
+          <button type="button" onClick={onSendToMaintenance} disabled={actionBusy} className="secondary-button justify-center disabled:cursor-not-allowed disabled:opacity-60">
             <Send className="h-5 w-5" />
             Send to Maintenance
           </button>
@@ -1190,11 +1256,13 @@ function WorkOrdersPage({
   workOrders,
   onApprove,
   onSendToMaintenance,
+  actionBusy,
 }: {
   workOrder: GeneratedWorkOrder;
   workOrders: GeneratedWorkOrder[];
   onApprove: () => void;
   onSendToMaintenance: () => void;
+  actionBusy: boolean;
 }) {
   const queue = workOrders.length > 0 ? workOrders : [workOrder];
   const openCount = queue.filter((order) => order.status !== "Dispatched").length;
@@ -1234,11 +1302,11 @@ function WorkOrdersPage({
               <p className="mt-1 text-sm text-slate-600">{workOrder.id}</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={onApprove} className="secondary-button">
+              <button type="button" onClick={onApprove} disabled={actionBusy} className="secondary-button disabled:cursor-not-allowed disabled:opacity-60">
                 <Check className="h-4 w-4" />
                 Approve
               </button>
-              <button type="button" onClick={onSendToMaintenance} className="primary-button">
+              <button type="button" onClick={onSendToMaintenance} disabled={actionBusy} className="primary-button disabled:cursor-not-allowed disabled:opacity-60">
                 <Send className="h-4 w-4" />
                 Dispatch
               </button>
