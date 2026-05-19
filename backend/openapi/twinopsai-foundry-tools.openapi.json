@@ -1,0 +1,327 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "TwinOpsAI Foundry Tools",
+    "version": "1.0.0",
+    "description": "OpenAPI tools for TwinOpsAI smart factory agents"
+  },
+  "servers": [
+    {
+      "url": "https://twinopsai-backend.salmonground-48eba3c2.southeastasia.azurecontainerapps.io"
+    }
+  ],
+  "paths": {
+    "/api/foundry/impact": {
+      "get": {
+        "operationId": "get_twinopsai_impact",
+        "summary": "Get telemetry risk and operational impact for a machine",
+        "parameters": [
+          {
+            "name": "machineId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "motor-A"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Telemetry risk and impact result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/foundry/twins/{twinId}/dependencies": {
+      "get": {
+        "operationId": "get_twin_dependencies",
+        "summary": "Get digital twin dependency and downstream impact",
+        "parameters": [
+          {
+            "name": "twinId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "default": "motor-A"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Digital twin dependency result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/foundry/sop": {
+      "get": {
+        "operationId": "get_sop_recommendation",
+        "summary": "Get SOP-backed maintenance recommendation",
+        "parameters": [
+          {
+            "name": "machineId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "motor-A"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SOP recommendation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/foundry/energy/recommendation": {
+      "get": {
+        "operationId": "get_energy_recommendation",
+        "summary": "Get energy and load adjustment recommendation",
+        "parameters": [
+          {
+            "name": "machineId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "motor-A"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Energy recommendation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/foundry/work-orders": {
+      "post": {
+        "operationId": "create_work_order",
+        "summary": "Create a maintenance work order draft",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "asset_id",
+                  "title",
+                  "priority",
+                  "recommended_action",
+                  "created_by"
+                ],
+                "properties": {
+                  "asset_id": {
+                    "type": "string",
+                    "default": "motor-A",
+                    "description": "Factory asset or machine ID"
+                  },
+                  "title": {
+                    "type": "string",
+                    "default": "Inspect motor-A vibration anomaly",
+                    "description": "Work order title"
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": [
+                      "Low",
+                      "Medium",
+                      "High",
+                      "Critical"
+                    ],
+                    "default": "Critical",
+                    "description": "Work order priority"
+                  },
+                  "recommended_action": {
+                    "type": "string",
+                    "default": "Inspect bearing, lubrication, and shaft alignment",
+                    "description": "Recommended maintenance action"
+                  },
+                  "created_by": {
+                    "type": "string",
+                    "default": "TwinOpsAI Foundry Agent",
+                    "description": "Creator of this work order"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created work order draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/foundry/work-orders/{workOrderId}/approve": {
+      "post": {
+        "operationId": "approve_work_order",
+        "summary": "Approve a work order",
+        "parameters": [
+          {
+            "name": "workOrderId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "approved_by": {
+                    "type": "string",
+                    "default": "supervisor"
+                  },
+                  "note": {
+                    "type": "string",
+                    "default": "Approved for maintenance dispatch"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Approved work order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/foundry/work-orders/{workOrderId}/dispatch": {
+      "post": {
+        "operationId": "dispatch_work_order",
+        "summary": "Dispatch an approved work order",
+        "parameters": [
+          {
+            "name": "workOrderId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dispatched_by": {
+                    "type": "string",
+                    "default": "TwinOpsAI Foundry Agent"
+                  },
+                  "note": {
+                    "type": "string",
+                    "default": "Dispatch after supervisor approval"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dispatched work order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Dispatch blocked by safety policy"
+          }
+        }
+      }
+    },
+    "/api/foundry/reports/impact/latest": {
+      "get": {
+        "operationId": "get_business_impact_report",
+        "summary": "Get latest business impact and ROI report",
+        "parameters": [
+          {
+            "name": "machineId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "motor-A"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Business impact report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

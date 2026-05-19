@@ -10,6 +10,7 @@ from urllib.error import URLError
 from urllib.request import Request as UrlRequest, urlopen
 from services.adt_service import get_mock_twin_dependencies, get_twin_dependencies, seed_demo_graph
 from fastapi.responses import StreamingResponse
+from routes.foundry_tools import router as foundry_tools_router
 from services.anomaly_service import detect_anomaly_from_telemetry
 from services.fabric_kql import (
     get_latest_telemetry as get_fabric_latest_telemetry,
@@ -98,6 +99,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(foundry_tools_router)
 
 
 openai_key = os.getenv("OPENAI_API_KEY")

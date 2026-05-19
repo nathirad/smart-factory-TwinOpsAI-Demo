@@ -34,9 +34,13 @@ import { buildAssets } from "../data/assetBuilders";
 import type { Asset, AssetStatus } from "../types";
 
 function apiBaseUrl(): string {
-  const env = import.meta.env.VITE_API_BASE_URL;
-  if (env !== undefined && env !== "") return env;
-  return "";
+  const env = import.meta.env.VITE_API_BASE_URL?.trim();
+
+  if (env) {
+    return env.replace(/\/$/, "");
+  }
+
+  return "https://twinopsai-backend.salmonground-48eba3c2.southeastasia.azurecontainerapps.io";
 }
 
 function mapBackendStatus(status: string): AssetStatus {
