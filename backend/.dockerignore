@@ -1,7 +1,39 @@
+# Python cache
 __pycache__/
 *.py[cod]
+*$py.class
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
 .venv/
 venv/
 smart-factory-env/
+
+# Environment / secrets
 .env
+.env.*
+!.env.example
+
+# Git
+.git/
+.gitignore
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Test / local output
+coverage/
+htmlcov/
+dist/
+build/
+
+# Node/frontend ถ้าเผลออยู่ใน backend context
+node_modules/

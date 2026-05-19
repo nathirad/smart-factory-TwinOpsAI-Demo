@@ -210,3 +210,15 @@ def register_agents_routes(app: FastAPI, app_state: dict[str, Any]) -> None:
             "execution_log": response["execution_log"],
             "generated_at": response["generated_at"],
         }
+    @app.get("/api/agents/health")
+    async def agents_health():
+        return {
+        "status": "ok",
+        "feature": "phase-6-agent-cascade",
+        "routes": [
+            "GET /api/agents"
+            "POST /api/agents/run",
+            "GET /api/agents/logs",
+            "GET /api/agents/health",
+        ],
+    }
